@@ -15,12 +15,20 @@ export class AuthService {
     private mailService: MailService,
     private config: ConfigService,
     private casesService: CasesService,
-  ) {}
+  ) { }
 
- async register(email: string, password: string, name?: string, role = 'end_user', endUserType?: string) {
+  async register(
+    email: string,
+    password: string,
+    name?: string,
+    role = 'end_user',
+    endUserType?: string,
+  ) {
     const existing = await this.usersService.findByEmail(email);
     if (existing) throw new BadRequestException('Email already registered');
+
     const passwordHash = await this.usersService.hashPassword(password);
+
     const user = await this.usersService.create({
       email: email.toLowerCase(),
       passwordHash,
@@ -28,8 +36,18 @@ export class AuthService {
       role,
       endUserType,
     } as any);
-    return this.signUser(user);
+
+    // Automatically create a case for this user
+    const newCase = await this.casesService.create(user._id.toString());
+
+    const signedUser = this.signUser(user);
+
+    return {
+      ...signedUser,
+      caseId: newCase._id.toString(), // return the case ID so user can generate invite link
+    };
   }
+
 
   signUser(user: any) {
     const payload = { id: user._id.toString(), role: user.role };
@@ -75,14 +93,12 @@ export class AuthService {
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
 
-  // Accept invite: creates user2 and binds to case
-  async acceptInvite(caseId: string, token: string, email: string, password: string, name?: string) {
+  async acceptInvite(caseId: string, token: string, email: string, password?: string, name?: string) {
     const caseDoc = await this.casesService.findById(caseId);
     if (!caseDoc) throw new BadRequestException('Invalid case or invite');
     if (!caseDoc.inviteToken || caseDoc.inviteToken !== token) throw new BadRequestException('Invalid token');
     if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date()) throw new BadRequestException('Invite expired');
 
-    // === SAFELY CHECK invitedEmail (avoid calling toLowerCase on null) ===
     if (!caseDoc.invitedEmail || caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()) {
       throw new BadRequestException('Invite email mismatch');
     }
@@ -90,7 +106,11 @@ export class AuthService {
     const existing = await this.usersService.findByEmail(email);
     if (existing) throw new BadRequestException('User already exists');
 
-    const passwordHash = await this.usersService.hashPassword(password);
+    // Generate a random password if not provided
+    const userPassword = password || this.usersService.generateRandomPassword();
+
+    const passwordHash = await this.usersService.hashPassword(userPassword);
+
     const user = await this.usersService.create({
       email: email.toLowerCase(),
       passwordHash,
@@ -101,10 +121,29 @@ export class AuthService {
       inviteCaseId: caseDoc._id,
     } as any);
 
-    // attach to case — convert ObjectId to string if necessary
-    // If your CasesService.attachInvitedUser accepts string IDs, use .toString()
+    // Attach user to case
     await this.casesService.attachInvitedUser(caseId, user._id.toString());
 
+    // Store the generated credentials in the case for later reference by owner (user1)
+    caseDoc.inviteCredentials = {
+      email: email.toLowerCase(),
+      password: userPassword,
+      createdAt: new Date(),
+    };
+    await caseDoc.save();
+
+    // Send email to invited user with credentials
+    await this.mailService.sendInviteCredentials(email, userPassword, caseDoc._id.toString());
+
     return this.signUser(user);
+  }
+
+    generateRandomPassword(length = 12): string {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
   }
 }

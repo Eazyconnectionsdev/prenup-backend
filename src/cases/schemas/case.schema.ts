@@ -142,11 +142,11 @@ export const Step2DetailsSchema = SchemaFactory.createForClass(Step2Details);
  * Step 3 & 4 mirror Step 1 & 2 but for the partner.
  */
 @Schema({ _id: false })
-export class Step3Details extends Step1Details {}
+export class Step3Details extends Step1Details { }
 export const Step3DetailsSchema = SchemaFactory.createForClass(Step3Details);
 
 @Schema({ _id: false })
-export class Step4Details extends Step2Details {}
+export class Step4Details extends Step2Details { }
 export const Step4DetailsSchema = SchemaFactory.createForClass(Step4Details);
 
 /**
@@ -247,7 +247,12 @@ export type CaseDocument = Case & Document;
 export class Case {
   @Prop({ type: String, default: 'Untitled case' })
   title: string;
-
+  @Prop({ type: Object, default: null }) // <-- Add this
+  inviteCredentials?: {
+    email: string;
+    password: string;
+    createdAt: Date;
+  };
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   owner: Types.ObjectId;
 

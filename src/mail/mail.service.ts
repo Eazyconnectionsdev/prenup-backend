@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import nodemailer from 'nodemailer';
 import { ConfigService } from '@nestjs/config';
+import AWS from 'aws-sdk';
 
 @Injectable()
 export class MailService {
@@ -8,20 +9,24 @@ export class MailService {
   private readonly logger = new Logger(MailService.name);
 
   constructor(private config: ConfigService) {
+    // Configure AWS SDK
+    AWS.config.update({
+      accessKeyId: this.config.get('AWS_ACCESS_KEY'),
+      secretAccessKey: this.config.get('AWS_SECRET_ACCESS_KEY'),
+      region: this.config.get('AWS_REGION'),
+    });
+
+    const ses = new AWS.SES({ apiVersion: '2010-12-01' });
+
+    // Create Nodemailer SES transporter
     this.transporter = nodemailer.createTransport({
-      host: this.config.get('EMAIL_HOST'),
-      port: Number(this.config.get('EMAIL_PORT') || 587),
-      secure: false,
-      auth: {
-        user: this.config.get('EMAIL_USER'),
-        pass: this.config.get('EMAIL_PASS'),
-      },
+      SES: { ses, aws: AWS },
     });
   }
 
   async sendInvite(to: string, inviteUrl: string) {
     const info = await this.transporter.sendMail({
-      from: this.config.get('EMAIL_USER'),
+      from: this.config.get('EMAIL_USER'), // Must be verified in SES
       to,
       subject: 'You are invited to a Wenup case',
       text: `You have been invited. Accept: ${inviteUrl}`,
@@ -33,7 +38,7 @@ export class MailService {
 
   async sendReset(to: string, resetUrl: string) {
     const info = await this.transporter.sendMail({
-      from: this.config.get('EMAIL_USER'),
+      from: this.config.get('EMAIL_USER'), // Must be verified in SES
       to,
       subject: 'Reset your password',
       text: `Reset link: ${resetUrl}`,
@@ -42,4 +47,24 @@ export class MailService {
     this.logger.log(`Reset sent: ${info.messageId}`);
     return info;
   }
+
+  async sendInviteCredentials(email: string, password: string, caseId: string) {
+    const body = `
+    Hello,
+
+    You have been invited to a case (ID: ${caseId}).
+
+    Your login credentials are:
+    Email: ${email}
+    Password: ${password}
+
+    Please login and update your password immediately.
+  `;
+    await this.transporter.sendMail({
+      to: email,
+      subject: 'You have been invited to a case',
+      text: body,
+    });
+  }
+
 }
