@@ -42,14 +42,13 @@ export class AuthController {
     await this.authService.resetPassword(dto.email, dto.token, dto.newPassword);
     return { message: 'Password reset successful' };
   }
-
   @Get('accept-invite')
   async acceptInvite(
     @Query('token') token: string,
     @Query('caseId') caseId: string,
     @Query('email') email: string,
     @Query('name') name?: string,
-    @Query('password') password?: string, // optional, generate if not provided
+    @Query('password') password?: string,
   ) {
     const c = await this.casesService.findById(caseId);
     if (
@@ -61,18 +60,24 @@ export class AuthController {
       throw new ForbiddenException('Invalid or expired invite token');
     }
 
-    // You can generate a random password if not provided
-    const userPassword = password || this.authService.generateRandomPassword?.() || 'DefaultPass123';
-    const user = await this.authService.acceptInvite(caseId, token, email, password, name);
-
-    // Attach invited user to case
-    await this.casesService.attachInvitedUser(caseId, (user as any)._id.toString());
+    // authService already:
+    // - creates user
+    // - attaches user to case
+    // - stores invite credentials
+    // - sends email
+    const result = await this.authService.acceptInvite(
+      caseId,
+      token,
+      email,
+      password,
+      name,
+    );
 
     return {
       message: 'Invite accepted, user registered',
-      user,
-      password: userPassword, // optionally return generated password
+      ...result,
     };
   }
+
 
 }

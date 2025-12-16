@@ -94,4 +94,17 @@ export class CasesService {
     await c.save();
     return c;
   }
+
+   async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    // Use findByIdAndUpdate to avoid optimistic concurrency VersionError
+    return this.caseModel.findByIdAndUpdate(
+      caseId,
+      { inviteCredentials: creds },
+      { new: true, useFindAndModify: false } // return updated doc
+    ).exec();
+  }
 }

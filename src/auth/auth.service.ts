@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
+
 import { JwtService } from '@nestjs/jwt';
 import crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
@@ -9,6 +10,8 @@ import { Types } from 'mongoose';
 
 @Injectable()
 export class AuthService {
+    private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private jwtService: JwtService,
     private usersService: UsersService,
@@ -92,26 +95,32 @@ export class AuthService {
     const hash = await this.usersService.hashPassword(newPassword);
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
+// inside AuthService (or the service that has acceptInvite)
+async acceptInvite(caseId: string, token: string, email: string, password?: string, name?: string) {
+  // 1) validate case & invite token
+  const caseDoc = await this.casesService.findById(caseId);
+  if (!caseDoc) throw new BadRequestException('Invalid case or invite');
+  if (!caseDoc.inviteToken || caseDoc.inviteToken !== token) throw new BadRequestException('Invalid token');
+  if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date()) throw new BadRequestException('Invite expired');
 
-  async acceptInvite(caseId: string, token: string, email: string, password?: string, name?: string) {
-    const caseDoc = await this.casesService.findById(caseId);
-    if (!caseDoc) throw new BadRequestException('Invalid case or invite');
-    if (!caseDoc.inviteToken || caseDoc.inviteToken !== token) throw new BadRequestException('Invalid token');
-    if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date()) throw new BadRequestException('Invite expired');
+  if (!caseDoc.invitedEmail || caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()) {
+    throw new BadRequestException('Invite email mismatch');
+  }
 
-    if (!caseDoc.invitedEmail || caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()) {
-      throw new BadRequestException('Invite email mismatch');
-    }
+  // 2) ensure user does not already exist
+  const existing = await this.usersService.findByEmail(email);
+  if (existing) throw new BadRequestException('User already exists');
 
-    const existing = await this.usersService.findByEmail(email);
-    if (existing) throw new BadRequestException('User already exists');
+  // 3) generate password (if not provided)
+  const userPassword = password || this.usersService.generateRandomPassword();
 
-    // Generate a random password if not provided
-    const userPassword = password || this.usersService.generateRandomPassword();
+  // 4) hash
+  const passwordHash = await this.usersService.hashPassword(userPassword);
 
-    const passwordHash = await this.usersService.hashPassword(userPassword);
-
-    const user = await this.usersService.create({
+  // 5) create user with try/catch and debug logging
+  let user;
+  try {
+    user = await this.usersService.create({
       email: email.toLowerCase(),
       passwordHash,
       name,
@@ -120,25 +129,48 @@ export class AuthService {
       invitedBy: caseDoc.owner,
       inviteCaseId: caseDoc._id,
     } as any);
-
-    // Attach user to case
-    await this.casesService.attachInvitedUser(caseId, user._id.toString());
-
-    // Store the generated credentials in the case for later reference by owner (user1)
-    caseDoc.inviteCredentials = {
-      email: email.toLowerCase(),
-      password: userPassword,
-      createdAt: new Date(),
-    };
-    await caseDoc.save();
-
-    // Send email to invited user with credentials
-    await this.mailService.sendInviteCredentials(email, userPassword, caseDoc._id.toString());
-
-    return this.signUser(user);
+  } catch (err) {
+    // log and rethrow with helpful message
+    this.logger?.error?.('User creation failed in acceptInvite', err as any);
+    throw new BadRequestException('Failed to create invited user');
   }
 
-    generateRandomPassword(length = 12): string {
+  // 6) defensive check: ensure we have an id to attach
+  const createdId =
+    (user && (user as any)._id) ? (user as any)._id.toString() :
+    (user && (user as any).id) ? (user as any).id.toString() :
+    null;
+
+  if (!createdId) {
+    // dump user for debugging (don't leave verbose logging in production if it contains sensitive data)
+    this.logger?.error?.('Created user missing _id or id', { user });
+    throw new BadRequestException('User creation did not return id');
+  }
+
+  // 7) Attach user to case (this clears invite token inside attachInvitedUser)
+  await this.casesService.attachInvitedUser(caseId, createdId);
+
+  // 8) store invite credentials (use service method to avoid VersionError)
+  await this.casesService.setInviteCredentials(caseId, {
+    email: email.toLowerCase(),
+    password: userPassword,
+    createdAt: new Date(),
+  });
+
+  // 9) Send email with credentials (catch errors but don't crash the whole flow if email fails)
+  try {
+    await this.mailService.sendInviteCredentials(email, userPassword, caseDoc._id.toString());
+  } catch (err) {
+    // log the email failure but continue — inviter can still fetch stored creds
+    this.logger?.error?.('Failed to send invite credentials email', err as any);
+  }
+
+  // 10) return signed user (token) or whatever signUser does
+  return this.signUser(user);
+}
+
+
+  generateRandomPassword(length = 12): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
     let result = '';
     for (let i = 0; i < length; i++) {

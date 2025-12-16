@@ -39,6 +39,7 @@ export class CasesController {
   @UseGuards(JwtAuthGuard)
   @Post(':id/invite')
   async invite(@Req() req, @Param('id') id: string, @Body('email') email: string) {
+    console.log("here")
     const user = req.user;
     const c = await this.casesService.findById(id);
     if (!c) throw new NotFoundException('Case not found');
