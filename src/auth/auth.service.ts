@@ -7,6 +7,16 @@ import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { CasesService } from '../cases/cases.service';
 import { Types } from 'mongoose';
+export interface SignedUser {
+  token: string;
+  expiresAt: number;
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    endUserType?: string;
+  };
+}
 
 @Injectable()
 export class AuthService {
@@ -62,19 +72,29 @@ export class AuthService {
     };
   }
 
-  signUser(user: any) {
-    const payload = { id: user._id.toString(), role: user.role };
-    const token = this.jwtService.sign(payload);
-    return {
-      token,
-      user: {
-        id: user._id.toString(), // ensure string
-        email: user.email,
-        role: user.role,
-        endUserType: user.endUserType,
-      },
-    };
-  }
+  // auth.service.ts
+signUser(user: any): SignedUser {
+  const payload = { id: user._id.toString(), role: user.role };
+  const token = this.jwtService.sign(payload);
+
+  const decoded: any = this.jwtService.decode(token);
+  const expiresAt =
+    decoded?.exp
+      ? decoded.exp * 1000
+      : Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+  return {
+    token,
+    expiresAt,
+    user: {
+      id: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      endUserType: user.endUserType,
+    },
+  };
+}
+
 
   async validateUser(email: string, password: string) {
     const user = await this.usersService.findByEmail(email);
