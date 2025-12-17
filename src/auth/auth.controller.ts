@@ -12,22 +12,44 @@ import { CasesService } from '../cases/cases.service';
 export class AuthController {
   constructor(private authService: AuthService, private casesService: CasesService) { }
 
-
-  @Post('register')
-  async register(@Body() dto: RegisterDto) {
-    return this.authService.register(
+@Post('register')
+  async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.register(
       dto.email,
       dto.password,
       dto.name,
       dto.role || 'end_user',
-      (dto as any).endUserType || null,
+      dto.endUserType,
       dto.phone,
-      typeof dto.marketingConsent === 'boolean' ? dto.marketingConsent : false,
-      !!dto.acceptedTerms, // boolean (ValidationPipe should ensure proper type)
+      dto.marketingConsent ?? false,
+      !!dto.acceptedTerms,
     );
+
+    // If register returned a token, set it as HttpOnly cookie and return body without token
+    if (result && (result as any).token) {
+      const token = (result as any).token as string;
+      const expiresAt = (result as any).expiresAt as number | undefined;
+      const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : 7 * 24 * 60 * 60 * 1000;
+
+      const cookieOptions = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production', // requires HTTPS in prod
+        sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+        maxAge,
+        path: '/',
+      };
+
+      res.cookie('access_token', token, cookieOptions);
+
+      // remove token from returned body
+      const { token: _t, ...rest } = result as any;
+      return rest;
+    }
+
+    return result;
   }
   // LOGIN: set cookie using passthrough so we can still return JSON
-  @HttpCode(200)
+    @HttpCode(200)
   @Post('login')
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const user = await this.authService.validateUser(dto.email, dto.password);
@@ -37,21 +59,23 @@ export class AuthController {
 
     const signed = this.authService.signUser(user);
     const token = signed.token;
+    const expiresAt = signed.expiresAt;
+    const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : 7 * 24 * 60 * 60 * 1000;
 
     const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // must be true in prod (HTTPS)
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const,
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      // domain: '.example.com', // set if needed for subdomains
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+      maxAge,
       path: '/',
     };
 
     res.cookie('access_token', token, cookieOptions);
 
-    // return user object (do NOT include token here)
+    // return user object (do NOT include token)
     return { user: signed.user };
   }
+
 
   // LOGOUT: clear cookie
   @Post('logout')
