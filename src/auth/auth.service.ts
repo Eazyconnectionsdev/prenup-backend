@@ -32,7 +32,9 @@ export class AuthService {
   async register(
     email: string,
     password: string,
-    name?: string,
+    firstName?: string,
+    middleName?: string,
+    lastName?: string,
     role = 'end_user',
     endUserType?: string,
     phone?: string,                  // new
@@ -53,7 +55,9 @@ export class AuthService {
     const user = await this.usersService.create({
       email: email.toLowerCase(),
       passwordHash,
-      name,
+      firstName,
+      middleName,
+      lastName,
       role,
       endUserType,
       phone: phone ? phone.trim() : undefined,
@@ -67,9 +71,21 @@ export class AuthService {
     const signedUser = this.signUser(user);
 
     return {
-      ...signedUser,
-      caseId: newCase._id.toString(),
-    };
+    _id: user._id.toString(),
+    email: user.email,
+    firstName: user.firstName,
+    middleName: user.middleName,
+    lastName: user.lastName,
+    suffix: user.suffix,
+    dateOfBirth: user.dateOfBirth ? user.dateOfBirth.toISOString() : null,
+    role: user.role,
+    endUserType: user.endUserType,
+    phone: user.phone,
+    marketingConsent: user.marketingConsent,
+    acceptedTerms: user.acceptedTerms,
+    token: signedUser.token,
+    caseId: newCase._id.toString(),
+  };
   }
 
   // auth.service.ts

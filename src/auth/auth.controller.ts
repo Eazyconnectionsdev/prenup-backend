@@ -17,7 +17,9 @@ export class AuthController {
     const result = await this.authService.register(
       dto.email,
       dto.password,
-      dto.name,
+      dto.firstName,
+      dto.middleName,
+      dto.lastName,
       dto.role || 'end_user',
       dto.endUserType,
       dto.phone,

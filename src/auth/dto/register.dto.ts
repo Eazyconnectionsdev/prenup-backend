@@ -1,5 +1,5 @@
 // src/auth/dto/register.dto.ts
-import { IsEmail, IsString, IsOptional, IsBoolean, IsNotEmpty, Matches } from 'class-validator';
+import { IsEmail, IsString, IsOptional, IsBoolean, IsNotEmpty, Matches, IsDateString } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -9,9 +9,28 @@ export class RegisterDto {
   @IsNotEmpty()
   password: string;
 
+  // Split name fields
   @IsOptional()
   @IsString()
-  name?: string;
+  firstName?: string;
+
+  @IsOptional()
+  @IsString()
+  middleName?: string;
+
+  @IsOptional()
+  @IsString()
+  lastName?: string;
+
+  // Suffix (e.g., Jr., Sr., III)
+  @IsOptional()
+  @IsString()
+  suffix?: string;
+
+  // Date of Birth
+  @IsOptional()
+  @IsDateString({}, { message: 'dateOfBirth must be a valid ISO date string' })
+  dateOfBirth?: string;
 
   @IsOptional()
   @IsString()
@@ -21,7 +40,7 @@ export class RegisterDto {
   @IsString()
   endUserType?: string;
 
-  // Optional phone — basic international format check (accepts + and digits, length 7-15)
+  // Optional phone — basic international format check
   @IsOptional()
   @Matches(/^\+?[0-9]{7,15}$/, {
     message: 'phone must be digits, optional leading +, length between 7 and 15',
@@ -33,7 +52,7 @@ export class RegisterDto {
   @IsBoolean()
   marketingConsent?: boolean;
 
-  // Must be present and true in request (we'll do a server-side check too)
+  // Must be present and true in request
   @IsBoolean()
   acceptedTerms: boolean;
 }
