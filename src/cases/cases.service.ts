@@ -13,7 +13,7 @@ export class CasesService {
     @InjectModel(Case.name) private caseModel: Model<CaseDocument>,
     private config: ConfigService,
     private mailService: MailService,
-  ) {}
+  ) { }
 
   /**
    * Create a new case owned by ownerId
@@ -95,7 +95,7 @@ export class CasesService {
     return c;
   }
 
-   async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
+  async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
     }
@@ -107,4 +107,10 @@ export class CasesService {
       { new: true, useFindAndModify: false } // return updated doc
     ).exec();
   }
+  
+  async findByUserId(userId: Types.ObjectId) {
+    return this.caseModel.findOne({ owner: userId });
+  }
+
+
 }

@@ -8,6 +8,11 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Step1Dto } from './dto/step1.dto';
 import { Step2Dto } from './dto/step2.dto';
+import { Step3Dto } from './dto/step3.dto';
+import { Step4Dto } from './dto/step4.dto';
+import { Step5Dto } from './dto/step5.dto';
+import { Step6Dto } from './dto/step6.dto';
+import { Step7Dto } from './dto/step7.dto';
 // import other step DTOs when created
 
 const END_USER1_STEPS = [1, 2, 5, 6, 7];
@@ -69,47 +74,49 @@ export class CasesController {
     const isPrivileged = user.role === 'superadmin' || user.role === 'admin' || user.role === 'case_manager';
     if (!isPrivileged) {
       if (user.role === 'end_user') {
-        if (c.owner.toString() === user.id) {
+
+        const userIdStr = (user.id ?? user._id)?.toString();
+        if (c.owner.toString() === userIdStr){
           if (user.endUserType !== 'user1') throw new ForbiddenException('Owner not user1');
-          if (!END_USER1_STEPS.includes(stepNumber)) throw new ForbiddenException('Not allowed to submit this step');
-        } else if (c.invitedUser && c.invitedUser.toString() === user.id) {
-          if (user.endUserType !== 'user2') throw new ForbiddenException('Invited user not user2');
-          if (!END_USER2_STEPS.includes(stepNumber)) throw new ForbiddenException('Not allowed to submit this step');
-        } else {
-          throw new ForbiddenException('Forbidden');
-        }
+        if (!END_USER1_STEPS.includes(stepNumber)) throw new ForbiddenException('Not allowed to submit this step');
+      } else if (c.invitedUser && c.invitedUser.toString() === user.id) {
+        if (user.endUserType !== 'user2') throw new ForbiddenException('Invited user not user2');
+        if (!END_USER2_STEPS.includes(stepNumber)) throw new ForbiddenException('Not allowed to submit this step');
       } else {
         throw new ForbiddenException('Forbidden');
       }
+    } else {
+      throw new ForbiddenException('Forbidden');
     }
+  }
 
-    const dtoMap: Record<number, any> = {
-      1: Step1Dto,
-      2: Step2Dto,
-      // 3: Step3Dto,
-      // 4: Step4Dto,
-      // 5: Step5Dto,
-      // 6: Step6Dto,
-      // 7: Step7Dto,
-    };
+  const dtoMap: Record<number, any> = {
+    1: Step1Dto,
+    2: Step2Dto,
+    3: Step3Dto,
+    4: Step4Dto,
+    5: Step5Dto,
+    6: Step6Dto,
+    7: Step7Dto,
+  };
 
-    const DtoClass = dtoMap[stepNumber];
+  const DtoClass = dtoMap[stepNumber];
     let validatedData = body;
 
-    if (DtoClass) {
-      const instance = plainToInstance(DtoClass, body);
-      const errors = await validate(instance as object, { whitelist: true, forbidNonWhitelisted: false });
-      if (errors.length > 0) {
-        const formatted = errors.map(err => ({
-          property: err.property,
-          constraints: err.constraints,
-          children: err.children,
-        }));
-        throw new BadRequestException({ message: 'Validation failed', errors: formatted });
-      }
-      validatedData = instance;
-    }
+if (DtoClass) {
+  const instance = plainToInstance(DtoClass, body);
+  const errors = await validate(instance as object, { whitelist: true, forbidNonWhitelisted: false });
+  if (errors.length > 0) {
+    const formatted = errors.map(err => ({
+      property: err.property,
+      constraints: err.constraints,
+      children: err.children,
+    }));
+    throw new BadRequestException({ message: 'Validation failed', errors: formatted });
+  }
+  validatedData = instance;
+}
 
-    return this.casesService.updateStep(id, stepNumber, validatedData, user.id);
+return this.casesService.updateStep(id, stepNumber, validatedData, user.id);
   }
 }

@@ -49,32 +49,43 @@ export class AuthController {
     return result;
   }
   // LOGIN: set cookie using passthrough so we can still return JSON
-    @HttpCode(200)
-  @Post('login')
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const user = await this.authService.validateUser(dto.email, dto.password);
-    if (!user) {
-      return { error: 'Invalid credentials' };
-    }
-
-    const signed = this.authService.signUser(user);
-    const token = signed.token;
-    const expiresAt = signed.expiresAt;
-    const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : 7 * 24 * 60 * 60 * 1000;
-
-    const cookieOptions = {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
-      maxAge,
-      path: '/',
-    };
-
-    res.cookie('access_token', token, cookieOptions);
-
-    // return user object (do NOT include token)
-    return { user: signed.user };
+  @HttpCode(200)
+@Post('login')
+async login(
+  @Body() dto: LoginDto,
+  @Res({ passthrough: true }) res: Response,
+) {
+  const user = await this.authService.validateUser(dto.email, dto.password);
+  if (!user) {
+    return { error: 'Invalid credentials' };
   }
+
+  // 🔹 Fetch user's case
+  const userCase = await this.casesService.findByUserId(user._id);
+  // OR: findByParticipantEmail(user.email)
+  // OR: findFirstCaseForUser(user._id)
+
+  const signed = this.authService.signUser(user);
+  const token = signed.token;
+  const expiresAt = signed.expiresAt;
+  const maxAge = expiresAt
+    ? Math.max(0, expiresAt - Date.now())
+    : 7 * 24 * 60 * 60 * 1000;
+
+  res.cookie('access_token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge,
+    path: '/',
+  });
+
+  return {
+    user: signed.user,
+    caseId: userCase?._id || null
+  };
+}
+
 
 
   // LOGOUT: clear cookie
