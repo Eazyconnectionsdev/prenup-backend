@@ -12,7 +12,7 @@ import { CasesService } from '../cases/cases.service';
 export class AuthController {
   constructor(private authService: AuthService, private casesService: CasesService) { }
 
-@Post('register')
+  @Post('register')
   async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.register(
       dto.email,
@@ -52,41 +52,53 @@ export class AuthController {
   }
   // LOGIN: set cookie using passthrough so we can still return JSON
   @HttpCode(200)
-@Post('login')
-async login(
-  @Body() dto: LoginDto,
-  @Res({ passthrough: true }) res: Response,
-) {
-  const user = await this.authService.validateUser(dto.email, dto.password);
-  if (!user) {
-    return { error: 'Invalid credentials' };
+  @Post('login')
+  async login(
+    @Body() dto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = await this.authService.validateUser(dto.email, dto.password);
+    if (!user) {
+      return { error: 'Invalid credentials' };
+    }
+
+    // 🔹 Fetch user's case
+    const userCase = await this.casesService.findByUserId(user._id);
+    // OR: findByParticipantEmail(user.email)
+    // OR: findFirstCaseForUser(user._id)
+    const signed = this.authService.signUser(user);
+    const token = signed.token;
+    const expiresAt = signed.expiresAt;
+    const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : 7 * 24 * 60 * 60 * 1000;
+
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+      maxAge,
+      path: '/',
+    });
+
+    // Build response matching register's shape (no token in JSON)
+    return {
+      _id: user._id?.toString ? user._id.toString() : user._id,
+      email: user.email,
+      firstName: (user as any).firstName,
+      middleName: (user as any).middleName,
+      lastName: (user as any).lastName,
+      suffix: (user as any).suffix,
+      dateOfBirth: (user as any).dateOfBirth ? (user as any).dateOfBirth.toISOString() : null,
+      role: user.role,
+      endUserType: user.endUserType,
+      phone: (user as any).phone,
+      marketingConsent: !!(user as any).marketingConsent,
+      acceptedTerms: !!(user as any).acceptedTerms,
+      caseId:
+        userCase && (userCase._id || userCase.id)
+          ? (userCase._id ? userCase._id.toString() : userCase.id.toString())
+          : null,
+    };
   }
-
-  // 🔹 Fetch user's case
-  const userCase = await this.casesService.findByUserId(user._id);
-  // OR: findByParticipantEmail(user.email)
-  // OR: findFirstCaseForUser(user._id)
-
-  const signed = this.authService.signUser(user);
-  const token = signed.token;
-  const expiresAt = signed.expiresAt;
-  const maxAge = expiresAt
-    ? Math.max(0, expiresAt - Date.now())
-    : 7 * 24 * 60 * 60 * 1000;
-
-  res.cookie('access_token', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge,
-    path: '/',
-  });
-
-  return {
-    user: signed.user,
-    caseId: userCase?._id || null
-  };
-}
 
 
 

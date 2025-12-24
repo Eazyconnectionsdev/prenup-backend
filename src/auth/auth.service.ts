@@ -141,6 +141,7 @@ signUser(user: any): SignedUser {
     const hash = await this.usersService.hashPassword(newPassword);
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
+  
   // inside AuthService (or the service that has acceptInvite)
   async acceptInvite(caseId: string, token: string, email: string, password?: string, name?: string) {
     // 1) validate case & invite token
