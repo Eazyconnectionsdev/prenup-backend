@@ -24,11 +24,30 @@ export class CasesService {
   }
 
   /**
-   * Find case by id, returns null if not valid id or not found
+   * Find case by id, returns null if not valid id or not found.
+   * If populate=true, populate owner and invitedUser (helpful for admin/case manager views).
    */
-  async findById(id: string) {
+  async findById(id: string, populate = false) {
     if (!Types.ObjectId.isValid(id)) return null;
-    return this.caseModel.findById(id).exec();
+    const q = this.caseModel.findById(id);
+    if (populate) q.populate('owner invitedUser');
+    return q.exec();
+  }
+
+  /**
+   * Return all cases (admins / case managers)
+   */
+  async findAll() {
+    return this.caseModel.find().exec();
+  }
+
+  /**
+   * Return cases related to a user (owner or invitedUser)
+   * userId can be string or ObjectId
+   */
+  async findByUser(userId: string | Types.ObjectId) {
+    const id = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
+    return this.caseModel.find({ $or: [{ owner: id }, { invitedUser: id }] }).exec();
   }
 
   /**
@@ -38,7 +57,6 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
-    // ensure proper ObjectId assignment (TypeScript-friendly)
     c.invitedUser = new Types.ObjectId(userId);
     c.inviteToken = null;
     c.inviteTokenExpires = null;
@@ -107,10 +125,9 @@ export class CasesService {
       { new: true, useFindAndModify: false } // return updated doc
     ).exec();
   }
-  
+
+  // NOTE: kept for compatibility; previously returned one case — use findByUser for multi-case queries
   async findByUserId(userId: Types.ObjectId) {
     return this.caseModel.findOne({ owner: userId });
   }
-
-
 }
