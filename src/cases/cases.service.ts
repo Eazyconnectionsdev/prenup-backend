@@ -1,4 +1,3 @@
-// src/cases/cases.service.ts
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';
@@ -88,8 +87,10 @@ export class CasesService {
   /**
    * Update a specific step on case and set status (submitted, submittedBy, submittedAt)
    * actorId must be a string user id
+   *
+   * lock param: if true the step will be marked locked (lockedBy/lockedAt set)
    */
-  async updateStep(caseId: string, stepNumber: number, data: any, actorId: string) {
+  async updateStep(caseId: string, stepNumber: number, data: any, actorId: string, lock = false) {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
@@ -100,14 +101,51 @@ export class CasesService {
 
     // assign the step object (replace or set as needed)
     (c as any)[key] = data;
-    c.status = c.status || {};
 
-    // ensure submittedBy is stored as ObjectId
-    c.status[key] = {
-      submitted: true,
-      submittedBy: new Types.ObjectId(actorId),
-      submittedAt: new Date(),
-    };
+    // ensure status container exists
+    c.status = c.status || {};
+    c.status[key] = c.status[key] || {};
+
+    // ensure boolean/fields are present (avoid undefined)
+    c.status[key].submitted = true;
+    c.status[key].submittedBy = new Types.ObjectId(actorId);
+    c.status[key].submittedAt = new Date();
+
+    if (lock) {
+      c.status[key].locked = true;
+      c.status[key].lockedBy = new Types.ObjectId(actorId);
+      c.status[key].lockedAt = new Date();
+      // wipe previous unlock audit
+      c.status[key].unlockedBy = null;
+      c.status[key].unlockedAt = null;
+    }
+
+    await c.save();
+    return c;
+  }
+
+  /**
+   * Unlock a given step (privileged users)
+   * actorId: id of the privileged user performing the unlock
+   */
+  async unlockStep(caseId: string, stepNumber: number, actorId: string) {
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const key = `step${stepNumber}`;
+    if (!['step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'step7'].includes(key)) {
+      throw new BadRequestException('Invalid step');
+    }
+
+    c.status = c.status || {};
+    c.status[key] = c.status[key] || {};
+
+    c.status[key].locked = false;
+    c.status[key].lockedBy = null;
+    c.status[key].lockedAt = null;
+
+    c.status[key].unlockedBy = new Types.ObjectId(actorId);
+    c.status[key].unlockedAt = new Date();
 
     await c.save();
     return c;

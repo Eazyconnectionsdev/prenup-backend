@@ -1,4 +1,3 @@
-// src/cases/schemas/case.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
@@ -228,13 +227,27 @@ export class Step7Details {
 export const Step7DetailsSchema = SchemaFactory.createForClass(Step7Details);
 
 /**
- * Step status subdocument
+ * Step status subdocument (now includes lock metadata)
  */
 @Schema({ _id: false })
 export class StepStatus {
   @Prop({ type: Boolean, default: false }) submitted: boolean;
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) submittedBy: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  submittedBy: Types.ObjectId | null;
+
   @Prop({ type: Date, default: null }) submittedAt: Date | null;
+
+  // lock metadata
+  @Prop({ type: Boolean, default: false }) locked: boolean;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  lockedBy: Types.ObjectId | null;
+  @Prop({ type: Date, default: null }) lockedAt: Date | null;
+
+  // unlock audit
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  unlockedBy: Types.ObjectId | null;
+  @Prop({ type: Date, default: null }) unlockedAt: Date | null;
 }
 export const StepStatusSchema = SchemaFactory.createForClass(StepStatus);
 
@@ -247,19 +260,20 @@ export type CaseDocument = Case & Document;
 export class Case {
   @Prop({ type: String, default: 'Untitled case' })
   title: string;
-  @Prop({ type: Object, default: null }) // <-- Add this
+
+  @Prop({ type: Object, default: null })
   inviteCredentials?: {
     email: string;
     password: string;
     createdAt: Date;
   };
+
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   owner: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   invitedUser: Types.ObjectId | null;
 
-  // explicitly give Mongoose the String type for nullable string fields
   @Prop({ type: String, default: null })
   invitedEmail: string | null;
 
