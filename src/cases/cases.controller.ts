@@ -267,10 +267,6 @@ export class CasesController {
   async seedLawyers(@Req() req) {
     const user = req.user;
 
-    if (!['superadmin', 'admin'].includes(user.role)) {
-      throw new ForbiddenException('Only admins can seed lawyers');
-    }
-
     return this.lawyersService.seedInitialLawyersIfEmpty();
   }
 
