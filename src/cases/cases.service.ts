@@ -184,9 +184,16 @@ export class CasesService {
     if (!c) throw new NotFoundException('Case not found');
 
     const actorObjId = new Types.ObjectId(actorId);
-    const isOwner = c.owner?.toString() === actorId;
-    const isInvited = c.invitedUser?.toString() === actorId;
+    const isOwner =
+      c.owner instanceof Types.ObjectId &&
+      c.owner.equals(actorObjId);
 
+    const isInvited =
+      c.invitedUser instanceof Types.ObjectId &&
+      c.invitedUser.equals(actorObjId);
+    console.log("actorObjId", actorObjId)
+    console.log("c.owner", c.owner)
+    console.log("isInvited", isInvited)
     if (!isOwner && !isInvited) throw new ForbiddenException('Actor not part of this case');
 
     const now = new Date();
@@ -230,93 +237,93 @@ export class CasesService {
     await c.save();
     return c;
   }
-async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = false) {
-  // validate ids
-  if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-  if (!Types.ObjectId.isValid(lawyerId)) throw new BadRequestException('Invalid lawyer id');
+  async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = false) {
+    // validate ids
+    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
+    if (!Types.ObjectId.isValid(lawyerId)) throw new BadRequestException('Invalid lawyer id');
 
-  // load case
-  const c = await this.caseModel.findById(caseId).exec();
-  if (!c) throw new NotFoundException('Case not found');
+    // load case
+    const c = await this.caseModel.findById(caseId).exec();
+    if (!c) throw new NotFoundException('Case not found');
 
-  // parse actor id
-  if (!Types.ObjectId.isValid(actorId)) {
-    throw new BadRequestException('Invalid actor id');
+    // parse actor id
+    if (!Types.ObjectId.isValid(actorId)) {
+      throw new BadRequestException('Invalid actor id');
+    }
+    const actorObjId = new Types.ObjectId(actorId);
+
+    // helper to extract ObjectId from field that might be ObjectId | populated doc | string
+    const extractId = (val: any): Types.ObjectId | null => {
+      if (!val) return null;
+      // if Mongoose ObjectId instance
+      if (val instanceof Types.ObjectId) return val;
+      // if populated doc with _id
+      if (typeof val === 'object' && val._id) {
+        return (val._id instanceof Types.ObjectId) ? val._id : new Types.ObjectId(val._id.toString());
+      }
+      // string
+      if (typeof val === 'string' && Types.ObjectId.isValid(val)) return new Types.ObjectId(val);
+      return null;
+    };
+
+    const ownerId = extractId(c.owner);
+    const invitedId = extractId(c.invitedUser);
+
+    const equalsId = (idA: Types.ObjectId | null, idB: Types.ObjectId) => {
+      if (!idA) return false;
+      // prefer equals if available
+      if (typeof (idA as any).equals === 'function') return (idA as any).equals(idB);
+      return idA.toString() === idB.toString();
+    };
+
+    const isOwner = equalsId(ownerId, actorObjId);
+    const isInvited = equalsId(invitedId, actorObjId);
+
+    if (!isOwner && !isInvited) {
+      // debug hint: include IDs in logs (avoid in production)
+      // console.debug('selectLawyer forbidden', { actorId, ownerId: ownerId?.toString(), invitedId: invitedId?.toString() });
+      throw new ForbiddenException('Actor not part of this case');
+    }
+
+    // ensure both parties have submitted
+    const p1Submitted = !!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted);
+    const p2Submitted = !!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted);
+    if (!p1Submitted || !p2Submitted) {
+      throw new BadRequestException('Both parties must submit their pre-questionnaires before selecting lawyers');
+    }
+
+    // ensure selected lawyer exists
+    const lawyerDoc = await this.lawyerModel.findById(lawyerId).exec();
+    if (!lawyerDoc) throw new NotFoundException('Lawyer not found');
+
+    // update appropriate preQuestionnaire
+    if (isOwner) {
+      const otherSelected = c.preQuestionnaireUser2?.selectedLawyer?.toString();
+      if (otherSelected === lawyerId && !force) {
+        throw new BadRequestException('This lawyer has already been chosen by the other party');
+      }
+
+      if (!c.preQuestionnaireUser1) {
+        c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
+      }
+      c.preQuestionnaireUser1.selectedLawyer = new Types.ObjectId(lawyerId);
+      (c.preQuestionnaireUser1 as any).selectedAt = new Date();
+    } else {
+      const otherSelected = c.preQuestionnaireUser1?.selectedLawyer?.toString();
+      if (otherSelected === lawyerId && !force) {
+        throw new BadRequestException('This lawyer has already been chosen by the other party');
+      }
+
+      if (!c.preQuestionnaireUser2) {
+        c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
+      }
+      c.preQuestionnaireUser2.selectedLawyer = new Types.ObjectId(lawyerId);
+      (c.preQuestionnaireUser2 as any).selectedAt = new Date();
+    }
+
+    await c.save();
+    return c;
   }
-  const actorObjId = new Types.ObjectId(actorId);
-
-  // helper to extract ObjectId from field that might be ObjectId | populated doc | string
-  const extractId = (val: any): Types.ObjectId | null => {
-    if (!val) return null;
-    // if Mongoose ObjectId instance
-    if (val instanceof Types.ObjectId) return val;
-    // if populated doc with _id
-    if (typeof val === 'object' && val._id) {
-      return (val._id instanceof Types.ObjectId) ? val._id : new Types.ObjectId(val._id.toString());
-    }
-    // string
-    if (typeof val === 'string' && Types.ObjectId.isValid(val)) return new Types.ObjectId(val);
-    return null;
-  };
-
-  const ownerId = extractId(c.owner);
-  const invitedId = extractId(c.invitedUser);
-
-  const equalsId = (idA: Types.ObjectId | null, idB: Types.ObjectId) => {
-    if (!idA) return false;
-    // prefer equals if available
-    if (typeof (idA as any).equals === 'function') return (idA as any).equals(idB);
-    return idA.toString() === idB.toString();
-  };
-
-  const isOwner = equalsId(ownerId, actorObjId);
-  const isInvited = equalsId(invitedId, actorObjId);
-
-  if (!isOwner && !isInvited) {
-    // debug hint: include IDs in logs (avoid in production)
-    // console.debug('selectLawyer forbidden', { actorId, ownerId: ownerId?.toString(), invitedId: invitedId?.toString() });
-    throw new ForbiddenException('Actor not part of this case');
-  }
-
-  // ensure both parties have submitted
-  const p1Submitted = !!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted);
-  const p2Submitted = !!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted);
-  if (!p1Submitted || !p2Submitted) {
-    throw new BadRequestException('Both parties must submit their pre-questionnaires before selecting lawyers');
-  }
-
-  // ensure selected lawyer exists
-  const lawyerDoc = await this.lawyerModel.findById(lawyerId).exec();
-  if (!lawyerDoc) throw new NotFoundException('Lawyer not found');
-
-  // update appropriate preQuestionnaire
-  if (isOwner) {
-    const otherSelected = c.preQuestionnaireUser2?.selectedLawyer?.toString();
-    if (otherSelected === lawyerId && !force) {
-      throw new BadRequestException('This lawyer has already been chosen by the other party');
-    }
-
-    if (!c.preQuestionnaireUser1) {
-      c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
-    }
-    c.preQuestionnaireUser1.selectedLawyer = new Types.ObjectId(lawyerId);
-    (c.preQuestionnaireUser1 as any).selectedAt = new Date();
-  } else {
-    const otherSelected = c.preQuestionnaireUser1?.selectedLawyer?.toString();
-    if (otherSelected === lawyerId && !force) {
-      throw new BadRequestException('This lawyer has already been chosen by the other party');
-    }
-
-    if (!c.preQuestionnaireUser2) {
-      c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
-    }
-    c.preQuestionnaireUser2.selectedLawyer = new Types.ObjectId(lawyerId);
-    (c.preQuestionnaireUser2 as any).selectedAt = new Date();
-  }
-
-  await c.save();
-  return c;
-}
 
 
   /**
@@ -341,7 +348,7 @@ async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = fa
   async findByUserId(userId: Types.ObjectId) {
     return this.caseModel.findOne({ owner: userId });
   }
-    async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
+  async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
     }
@@ -349,7 +356,7 @@ async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = fa
     return this.caseModel.findByIdAndUpdate(
       caseId,
       { inviteCredentials: creds },
-      { new: true, useFindAndModify: false } 
+      { new: true, useFindAndModify: false }
     ).exec();
   }
 }
