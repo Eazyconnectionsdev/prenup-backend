@@ -1,15 +1,18 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+// src/cases/cases.service.ts
+import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Case, CaseDocument } from './schemas/case.schema';
+import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class CasesService {
   constructor(
     @InjectModel(Case.name) private caseModel: Model<CaseDocument>,
+    @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>,
     private config: ConfigService,
     private mailService: MailService,
   ) { }
@@ -24,12 +27,14 @@ export class CasesService {
 
   /**
    * Find case by id, returns null if not valid id or not found.
-   * If populate=true, populate owner and invitedUser (helpful for admin/case manager views).
+   * If populate=true, populate owner and invitedUser and lawyer selections.
    */
   async findById(id: string, populate = false) {
     if (!Types.ObjectId.isValid(id)) return null;
     const q = this.caseModel.findById(id);
-    if (populate) q.populate('owner invitedUser');
+    if (populate) {
+      q.populate('owner invitedUser preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer');
+    }
     return q.exec();
   }
 
@@ -85,10 +90,7 @@ export class CasesService {
   }
 
   /**
-   * Update a specific step on case and set status (submitted, submittedBy, submittedAt)
-   * actorId must be a string user id
-   *
-   * lock param: if true the step will be marked locked (lockedBy/lockedAt set)
+   * Update a specific step on case and set status (existing method preserved)
    */
   async updateStep(caseId: string, stepNumber: number, data: any, actorId: string, lock = false) {
     const c = await this.caseModel.findById(caseId);
@@ -99,14 +101,11 @@ export class CasesService {
       throw new BadRequestException('Invalid step');
     }
 
-    // assign the step object (replace or set as needed)
     (c as any)[key] = data;
 
-    // ensure status container exists
     c.status = c.status || {};
     c.status[key] = c.status[key] || {};
 
-    // ensure boolean/fields are present (avoid undefined)
     c.status[key].submitted = true;
     c.status[key].submittedBy = new Types.ObjectId(actorId);
     c.status[key].submittedAt = new Date();
@@ -115,7 +114,6 @@ export class CasesService {
       c.status[key].locked = true;
       c.status[key].lockedBy = new Types.ObjectId(actorId);
       c.status[key].lockedAt = new Date();
-      // wipe previous unlock audit
       c.status[key].unlockedBy = null;
       c.status[key].unlockedAt = null;
     }
@@ -126,7 +124,6 @@ export class CasesService {
 
   /**
    * Unlock a given step (privileged users)
-   * actorId: id of the privileged user performing the unlock
    */
   async unlockStep(caseId: string, stepNumber: number, actorId: string) {
     const c = await this.caseModel.findById(caseId);
@@ -151,21 +148,171 @@ export class CasesService {
     return c;
   }
 
-  async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
+  /**
+   * Update PreQuestionnaire fields directly (used by controller convenience)
+   * Expects dotted paths, e.g. { 'preQuestionnaireUser1.answers': [...], 'preQuestionnaireUser1.selectedLawyer': ObjectId(...) }
+   */
+  async updatePreQuestionnaire(caseId: string, updatePatch: any) {
+    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
+    const updated = await this.caseModel.findByIdAndUpdate(caseId, { $set: updatePatch }, { new: true }).exec();
+    if (!updated) throw new NotFoundException('Case not found');
+    return updated;
+  }
+
+  /**
+   * Submit the pre-questionnaire for the current actor (owner => user1, invitedUser => user2).
+   * Automatically locks that user's pre-questionnaire to prevent re-submission by plain end users.
+   */// inside CasesService (add helper and replace the two methods)
+
+  private makeEmptyPreQuestionnaire() {
+    // keep shape in sync with your PreQuestionnaire schema
+    return {
+      answers: [] as string[],
+      selectedLawyer: null as Types.ObjectId | null,
+      submitted: false,
+      submittedBy: null as Types.ObjectId | null,
+      submittedAt: null as Date | null,
+      locked: false,
+      lockedBy: null as Types.ObjectId | null,
+      lockedAt: null as Date | null,
+      // any other fields you expect (e.g. selectedAt) can be added here
+    };
+  }
+
+  async submitPreQuestionnaire(caseId: string, actorId: string, answers: string[]) {
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const actorObjId = new Types.ObjectId(actorId);
+    const isOwner = c.owner?.toString() === actorId;
+    const isInvited = c.invitedUser?.toString() === actorId;
+
+    if (!isOwner && !isInvited) throw new ForbiddenException('Actor not part of this case');
+
+    const now = new Date();
+
+    if (isOwner) {
+      // check lock safely using optional chaining
+      if (c.preQuestionnaireUser1?.submitted && c.preQuestionnaireUser1?.locked) {
+        throw new BadRequestException('Pre-questionnaire already submitted and locked for user1');
+      }
+
+      // ensure object exists before assigning fields (this removes the TS error)
+      if (!c.preQuestionnaireUser1) {
+        c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
+      }
+
+      c.preQuestionnaireUser1.answers = answers ?? [];
+      c.preQuestionnaireUser1.submitted = true;
+      c.preQuestionnaireUser1.submittedBy = actorObjId;
+      c.preQuestionnaireUser1.submittedAt = now;
+      c.preQuestionnaireUser1.locked = true;
+      c.preQuestionnaireUser1.lockedBy = actorObjId;
+      c.preQuestionnaireUser1.lockedAt = now;
+    } else {
+      if (c.preQuestionnaireUser2?.submitted && c.preQuestionnaireUser2?.locked) {
+        throw new BadRequestException('Pre-questionnaire already submitted and locked for user2');
+      }
+
+      if (!c.preQuestionnaireUser2) {
+        c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
+      }
+
+      c.preQuestionnaireUser2.answers = answers ?? [];
+      c.preQuestionnaireUser2.submitted = true;
+      c.preQuestionnaireUser2.submittedBy = actorObjId;
+      c.preQuestionnaireUser2.submittedAt = now;
+      c.preQuestionnaireUser2.locked = true;
+      c.preQuestionnaireUser2.lockedBy = actorObjId;
+      c.preQuestionnaireUser2.lockedAt = now;
+    }
+
+    await c.save();
+    return c;
+  }
+
+  async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = false) {
+    if (!Types.ObjectId.isValid(lawyerId)) throw new BadRequestException('Invalid lawyer id');
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const actorObjId = new Types.ObjectId(actorId);
+    const isOwner = c.owner?.toString() === actorId;
+    const isInvited = c.invitedUser?.toString() === actorId;
+    if (!isOwner && !isInvited) throw new ForbiddenException('Actor not part of this case');
+
+    // ensure both parties have submitted (use safe optional chaining)
+    const p1Submitted = !!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted);
+    const p2Submitted = !!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted);
+    if (!p1Submitted || !p2Submitted) {
+      throw new BadRequestException('Both parties must submit their pre-questionnaires before selecting lawyers');
+    }
+
+    // ensure selected lawyer exists
+    const lawyerDoc = await this.lawyerModel.findById(lawyerId).exec();
+    if (!lawyerDoc) throw new NotFoundException('Lawyer not found');
+
+    if (isOwner) {
+      const otherSelected = c.preQuestionnaireUser2?.selectedLawyer?.toString();
+      if (otherSelected === lawyerId && !force) {
+        throw new BadRequestException('This lawyer has already been chosen by the other party');
+      }
+
+      if (!c.preQuestionnaireUser1) {
+        c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
+      }
+
+      c.preQuestionnaireUser1.selectedLawyer = new Types.ObjectId(lawyerId);
+      (c.preQuestionnaireUser1 as any).selectedAt = new Date();
+    } else {
+      const otherSelected = c.preQuestionnaireUser1?.selectedLawyer?.toString();
+      if (otherSelected === lawyerId && !force) {
+        throw new BadRequestException('This lawyer has already been chosen by the other party');
+      }
+
+      if (!c.preQuestionnaireUser2) {
+        c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
+      }
+
+      c.preQuestionnaireUser2.selectedLawyer = new Types.ObjectId(lawyerId);
+      (c.preQuestionnaireUser2 as any).selectedAt = new Date();
+    }
+
+    await c.save();
+    return c;
+  }
+
+  /**
+   * Check whether a given lawyer is already selected by either user for a case.
+   */
+  async isLawyerSelected(caseId: string, lawyerId: string) {
+    const c = await this.caseModel.findById(caseId).select('preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer').lean().exec();
+    if (!c) throw new NotFoundException('Case not found');
+    const l1 = c.preQuestionnaireUser1?.selectedLawyer?.toString();
+    const l2 = c.preQuestionnaireUser2?.selectedLawyer?.toString();
+    return l1 === lawyerId || l2 === lawyerId;
+  }
+
+
+  async listLawyers(limit = 50, page = 1) {
+    const skip = (page - 1) * limit;
+    const docs = await this.lawyerModel.find().skip(skip).limit(limit).lean().exec();
+    const total = await this.lawyerModel.countDocuments().exec();
+    return { total, docs };
+  }
+
+  async findByUserId(userId: Types.ObjectId) {
+    return this.caseModel.findOne({ owner: userId });
+  }
+    async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
     }
 
-    // Use findByIdAndUpdate to avoid optimistic concurrency VersionError
     return this.caseModel.findByIdAndUpdate(
       caseId,
       { inviteCredentials: creds },
-      { new: true, useFindAndModify: false } // return updated doc
+      { new: true, useFindAndModify: false } 
     ).exec();
-  }
-
-  // NOTE: kept for compatibility; previously returned one case — use findByUser for multi-case queries
-  async findByUserId(userId: Types.ObjectId) {
-    return this.caseModel.findOne({ owner: userId });
   }
 }

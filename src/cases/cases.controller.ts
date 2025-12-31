@@ -23,13 +23,14 @@ import { Step4Dto } from './dto/step4.dto';
 import { Step5Dto } from './dto/step5.dto';
 import { Step6Dto } from './dto/step6.dto';
 import { Step7Dto } from './dto/step7.dto';
+import { LawyersService } from './lawyer.service';
 
 const END_USER1_STEPS = [1, 2, 5, 6, 7];
 const END_USER2_STEPS = [3, 4];
 
 @Controller('cases')
 export class CasesController {
-  constructor(private casesService: CasesService) { }
+  constructor(private casesService: CasesService, private lawyersService: LawyersService) { }
 
   private ensureUser(req: any) {
     const user = req.user;
@@ -130,7 +131,6 @@ export class CasesController {
 
     const isPrivileged = this.isPrivilegedRole(user.role);
 
-    // If not privileged, enforce end_user rules. Privileged users are allowed to update any step.
     if (!isPrivileged) {
       const userIdStr = (user.id ?? user._id)?.toString();
 
@@ -139,7 +139,6 @@ export class CasesController {
         if (user.endUserType !== 'user1') throw new ForbiddenException('Owner not user1');
         if (!END_USER1_STEPS.includes(stepNumber)) throw new ForbiddenException('Not allowed to submit this step');
       }
-      // Invited user path (end_user type user2)
       else if (c.invitedUser && c.invitedUser?.toString() === userIdStr) {
         if (user.endUserType !== 'user2') throw new ForbiddenException('Invited user not user2');
         if (!END_USER2_STEPS.includes(stepNumber)) throw new ForbiddenException('Not allowed to submit this step');
@@ -182,7 +181,6 @@ export class CasesController {
       validatedData = instance;
     }
 
-    // lock step automatically if the actor is NOT privileged (i.e. a normal end-user)
     const shouldLock = !isPrivileged;
     return this.casesService.updateStep(id, stepNumber, validatedData, user.id, shouldLock);
   }
@@ -199,5 +197,116 @@ export class CasesController {
 
     const stepNumber = Number(stepNumberStr);
     return this.casesService.unlockStep(id, stepNumber, user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/lawyers')
+  async getLawyersForCase(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    const c = await this.casesService.findById(id);
+    if (!c) throw new NotFoundException('Case not found');
+
+    // Access check for non-admins
+    if (!isPrivileged) {
+      const userIdStr = (user.id ?? user._id)?.toString();
+      if (
+        c.owner?.toString() !== userIdStr &&
+        c.invitedUser?.toString() !== userIdStr
+      ) {
+        throw new ForbiddenException('Forbidden');
+      }
+    }
+
+    const lawyers = await this.lawyersService.listAll();
+
+    const p1SelectedId = c.preQuestionnaireUser1?.selectedLawyer?.toString() ?? null;
+    const p2SelectedId = c.preQuestionnaireUser2?.selectedLawyer?.toString() ?? null;
+
+    const userIdStr = (user.id ?? user._id)?.toString();
+    const isOwner = c.owner?.toString() === userIdStr;
+    const isInvited = c.invitedUser?.toString() === userIdStr;
+
+    const mapped = lawyers.map((l: any) => {
+      const lid = l._id.toString();
+
+      const selectedByUser1 = p1SelectedId === lid;
+      const selectedByUser2 = p2SelectedId === lid;
+
+      let selectedBy: 'you' | 'partner' | 'both' | null = null;
+
+      if (selectedByUser1 && selectedByUser2) {
+        selectedBy = 'both';
+      } else if (selectedByUser1) {
+        selectedBy = isOwner ? 'you' : 'partner';
+      } else if (selectedByUser2) {
+        selectedBy = isInvited ? 'you' : 'partner';
+      }
+
+      return {
+        id: lid,
+        externalId: l.externalId,
+        name: l.name,
+        priceText: l.priceText,
+        avatarUrl: l.avatarUrl,
+        selectedBy,
+      };
+    });
+
+    return {
+      total: mapped.length,
+      lawyers: mapped,
+      yourSelected: isOwner ? p1SelectedId : p2SelectedId,
+      partnerSelected: isOwner ? p2SelectedId : p1SelectedId,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('seed')
+  async seedLawyers(@Req() req) {
+    const user = req.user;
+
+    if (!['superadmin', 'admin'].includes(user.role)) {
+      throw new ForbiddenException('Only admins can seed lawyers');
+    }
+
+    return this.lawyersService.seedInitialLawyersIfEmpty();
+  }
+
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/pre-questionnaire')
+  async submitPreQuestionnaireEndpoint(@Req() req, @Param('id') id: string, @Body() body: { answers?: string[] }) {
+    const user = this.ensureUser(req);
+    // basic validation
+    if (!body || !Array.isArray(body.answers)) {
+      throw new BadRequestException('Request body must include "answers" array');
+    }
+
+    // call service to submit (this will lock it and set submitted metadata)
+    const updatedCase = await this.casesService.submitPreQuestionnaire(id, user.id ?? user._id, body.answers);
+    return {
+      message: 'Pre-questionnaire submitted',
+      case: updatedCase,
+    };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/select-lawyer')
+  async selectLawyerEndpoint(@Req() req, @Param('id') id: string, @Body() body: { lawyerId?: string; force?: boolean }) {
+    const user = this.ensureUser(req);
+    if (!body || !body.lawyerId) {
+      throw new BadRequestException('Request body must include "lawyerId" (Mongo _id of the lawyer)');
+    }
+
+    // If caller is privileged they can pass force=true to override exclusivity (service handles it)
+    const force = !!body.force;
+
+    const updatedCase = await this.casesService.selectLawyer(id, user.id ?? user._id, body.lawyerId, force);
+    return {
+      message: 'Lawyer selected',
+      case: updatedCase,
+    };
   }
 }

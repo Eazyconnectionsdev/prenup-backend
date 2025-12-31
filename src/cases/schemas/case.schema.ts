@@ -251,6 +251,37 @@ export class StepStatus {
 }
 export const StepStatusSchema = SchemaFactory.createForClass(StepStatus);
 
+@Schema({ _id: false })
+export class PreQuestionnaire {
+  // answers stored as strings (can be 'yes'/'no' or longer text). Frontend controls content/length.
+  @Prop({ type: [String], default: [] })
+  answers: string[];
+
+  // Lawyer selected by this user (ref to Lawyer)
+  @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null })
+  selectedLawyer: Types.ObjectId | null;
+
+  @Prop({ type: Boolean, default: false })
+  submitted: boolean;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  submittedBy: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  submittedAt: Date | null;
+
+  // Lock to prevent plain end-user re-submission
+  @Prop({ type: Boolean, default: false })
+  locked: boolean;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  lockedBy: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  lockedAt: Date | null;
+}
+export const PreQuestionnaireSchema = SchemaFactory.createForClass(PreQuestionnaire);
+
 /**
  * Main Case schema
  */
@@ -304,6 +335,13 @@ export class Case {
 
   @Prop({ type: Step7DetailsSchema, default: {} })
   step7: Step7Details;
+
+  // in case.schema.ts
+  @Prop({ type: PreQuestionnaireSchema, default: {} })
+  preQuestionnaireUser1: PreQuestionnaire; // remove the `?`
+
+  @Prop({ type: PreQuestionnaireSchema, default: {} })
+  preQuestionnaireUser2: PreQuestionnaire; // remove the `?`
 
   // per-step status
   @Prop({
