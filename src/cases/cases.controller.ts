@@ -116,10 +116,47 @@ export class CasesController {
     return this.casesService.attachInvitedUser(id, user.id);
   }
 
+  /**
+   * Fetch a single step's data and status for a case
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/steps/:stepNumber')
+  async getStep(@Req() req, @Param('id') id: string, @Param('stepNumber') stepNumberStr: string) {
+    const user = this.ensureUser(req);
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    const c = await this.casesService.findById(id, isPrivileged);
+    if (!c) throw new NotFoundException('Case not found');
+
+    // Access check for non-admins
+    if (!isPrivileged) {
+      const userIdStr = (user.id ?? user._id)?.toString();
+      if (c.owner?.toString() !== userIdStr && c.invitedUser?.toString() !== userIdStr) {
+        throw new ForbiddenException('Forbidden');
+      }
+    }
+
+    const stepNumber = Number(stepNumberStr);
+    if (!Number.isInteger(stepNumber) || stepNumber < 1 || stepNumber > 7) {
+      throw new BadRequestException('Invalid step number');
+    }
+
+    const key = `step${stepNumber}`;
+    const stepData = (c as any)[key] ?? {};
+    const stepStatus = (c.status && (c.status as any)[key]) || {};
+
+    return {
+      stepNumber,
+      data: stepData,
+      status: stepStatus,
+      fullyLocked: !!c.fullyLocked,
+    };
+  }
+
   /** Update a specific step of a case
-   * - Non-privileged end-users: must follow end-user step rules & cannot update locked steps.
-   * - Privileged roles: may update any step (even when locked).
-   * After a non-privileged user updates a step, it will be locked automatically.
+   * - Non-privileged end-users: must follow end-user step rules (which step types they can submit).
+   * - Privileged roles: may update any step.
+   * - New locking: only step 7 submission triggers a complete lock; otherwise end-users may re-submit/update 1-6.
    */
   @UseGuards(JwtAuthGuard)
   @Post(':id/steps/:stepNumber')
@@ -147,11 +184,9 @@ export class CasesController {
       }
     }
 
-    // check lock status: if locked and actor is NOT privileged -> deny
-    const key = `step${stepNumber}`;
-    const stepStatus = (c.status && (c.status as any)[key]) || {};
-    if (stepStatus.locked && !isPrivileged) {
-      throw new ForbiddenException('Step is locked. Please ask a case manager to unlock it.');
+    // If case is fully locked, only privileged can update (steps are locked).
+    if (c.fullyLocked && !isPrivileged) {
+      throw new ForbiddenException('Case is fully locked. Please ask a case manager to unlock it.');
     }
 
     const dtoMap: Record<number, any> = {
@@ -181,23 +216,22 @@ export class CasesController {
       validatedData = instance;
     }
 
-    const shouldLock = !isPrivileged;
-    return this.casesService.updateStep(id, stepNumber, validatedData, user.id, shouldLock);
+    // call service (service will perform full-lock if this is step 7)
+    const updated = await this.casesService.updateStep(id, stepNumber, validatedData, user.id ?? user._id);
+    return updated;
   }
 
-  /**
-   * Unlock a step (only privileged roles)
-   */
+  // cases.controller.ts (excerpt)
   @UseGuards(JwtAuthGuard)
-  @Post(':id/steps/:stepNumber/unlock')
-  async unlockStep(@Req() req, @Param('id') id: string, @Param('stepNumber') stepNumberStr: string) {
+  @Post(':id/unlock')
+  async unlockCase(@Req() req, @Param('id') id: string) {
     const user = this.ensureUser(req);
     const isPrivileged = this.isPrivilegedRole(user.role);
-    if (!isPrivileged) throw new ForbiddenException('Only privileged users may unlock steps');
+    if (!isPrivileged) throw new ForbiddenException('Only privileged users may unlock cases');
 
-    const stepNumber = Number(stepNumberStr);
-    return this.casesService.unlockStep(id, stepNumber, user.id);
+    return this.casesService.unlockCase(id, user.id);
   }
+
 
   @UseGuards(JwtAuthGuard)
   @Get(':id/lawyers')
@@ -216,6 +250,15 @@ export class CasesController {
         c.invitedUser?.toString() !== userIdStr
       ) {
         throw new ForbiddenException('Forbidden');
+      }
+    }
+
+    // New rule: pre-questionnaire submission and lawyer selection are only allowed *after*
+    // all steps are submitted AND the case is fully locked. Enforce controller-level check here.
+    if (!isPrivileged) {
+      const allStepsSubmitted = this.casesService.areAllStepsSubmitted(c);
+      if (!(c.fullyLocked && allStepsSubmitted)) {
+        throw new ForbiddenException('Lawyer listing/selection is allowed only after all steps are submitted and the case is fully locked.');
       }
     }
 
@@ -280,7 +323,17 @@ export class CasesController {
       throw new BadRequestException('Request body must include "answers" array');
     }
 
-    // call service to submit (this will lock it and set submitted metadata)
+    const c = await this.casesService.findById(id);
+    if (!c) throw new NotFoundException('Case not found');
+
+    // New rule: pre-questionnaire can only be submitted after all steps are submitted AND case is fully locked.
+    const isPrivileged = this.isPrivilegedRole(user.role);
+    const allStepsSubmitted = this.casesService.areAllStepsSubmitted(c);
+    if (!(c.fullyLocked && allStepsSubmitted) && !isPrivileged) {
+      throw new ForbiddenException('Pre-questionnaire can only be submitted after all steps are submitted and the case is fully locked.');
+    }
+
+    // call service to submit (service enforces the same rules)
     const updatedCase = await this.casesService.submitPreQuestionnaire(id, user.id ?? user._id, body.answers);
     return {
       message: 'Pre-questionnaire submitted',
@@ -294,6 +347,17 @@ export class CasesController {
     const user = this.ensureUser(req);
     if (!body || !body.lawyerId) {
       throw new BadRequestException('Request body must include "lawyerId" (Mongo _id of the lawyer)');
+    }
+
+    const c = await this.casesService.findById(id);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    // New rule: lawyer selection allowed only after all steps are submitted AND case is fully locked.
+    const allStepsSubmitted = this.casesService.areAllStepsSubmitted(c);
+    if (!(c.fullyLocked && allStepsSubmitted) && !isPrivileged) {
+      throw new ForbiddenException('Lawyer selection is allowed only after all steps are submitted and the case is fully locked.');
     }
 
     // If caller is privileged they can pass force=true to override exclusivity (service handles it)

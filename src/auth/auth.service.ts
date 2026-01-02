@@ -163,7 +163,7 @@ signUser(user: any): SignedUser {
 
     // 4) hash
     const passwordHash = await this.usersService.hashPassword(userPassword);
-
+const acceptedTerms = true;
     // 5) create user with try/catch and debug logging
     let user;
     try {
@@ -175,6 +175,7 @@ signUser(user: any): SignedUser {
         endUserType: 'user2',
         invitedBy: caseDoc.owner,
         inviteCaseId: caseDoc._id,
+        acceptedTerms : acceptedTerms
       } as any);
     } catch (err) {
       // log and rethrow with helpful message

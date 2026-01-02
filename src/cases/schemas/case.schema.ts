@@ -271,6 +271,7 @@ export class PreQuestionnaire {
   submittedAt: Date | null;
 
   // Lock to prevent plain end-user re-submission
+  // NOTE: Under the new rules, these remain fields but are only set when the whole case becomes locked.
   @Prop({ type: Boolean, default: false })
   locked: boolean;
 
@@ -338,10 +339,10 @@ export class Case {
 
   // in case.schema.ts
   @Prop({ type: PreQuestionnaireSchema, default: {} })
-  preQuestionnaireUser1: PreQuestionnaire; // remove the `?`
+  preQuestionnaireUser1: PreQuestionnaire;
 
   @Prop({ type: PreQuestionnaireSchema, default: {} })
-  preQuestionnaireUser2: PreQuestionnaire; // remove the `?`
+  preQuestionnaireUser2: PreQuestionnaire;
 
   // per-step status
   @Prop({
@@ -365,6 +366,19 @@ export class Case {
     step6?: StepStatus;
     step7?: StepStatus;
   };
+
+  /**
+   * FULL CASE LOCK (new)
+   * When step7 is submitted we set fullyLocked = true and populate who locked it and when.
+   */
+  @Prop({ type: Boolean, default: false })
+  fullyLocked?: boolean;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  fullyLockedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  fullyLockedAt?: Date | null;
 }
 
 export const CaseSchema = SchemaFactory.createForClass(Case);
