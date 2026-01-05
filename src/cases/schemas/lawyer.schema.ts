@@ -1,24 +1,58 @@
-// src/cases/schemas/lawyer.schema.ts
+
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
+import { Company } from './company.schema';
 
 export type LawyerDocument = Lawyer & Document;
 
 @Schema({ timestamps: true })
 export class Lawyer {
   @Prop({ required: true })
-  externalId: string; // small numeric/string id from UI (e.g. "1","2") or provider id
+  externalId: string;
 
   @Prop({ required: true })
   name: string;
 
-  @Prop({ required: true })
-  priceText: string; // e.g. "£300 including VAT/VAT exempt" or "£300 + VAT"
+  @Prop()
+  priceText: string;
 
-  @Prop({ required: true })
-  avatarUrl: string;
+  @Prop()
+  avatarUrl?: string;
 
   @Prop({ type: String, default: 'available' })
   status?: 'available' | 'unavailable' | 'archived';
+
+  // New: reference to Company
+  @Prop({ type: Types.ObjectId, ref: 'Company', required: true })
+  company: Types.ObjectId | Company;
+
+  // Additional contact fields
+  @Prop()
+  publicEmail?: string;
+
+  @Prop()
+  publicPhone?: string;
+
+  @Prop()
+  directEmail?: string;
+
+  @Prop()
+  directPhone?: string;
+
+  @Prop()
+  website?: string;
+
+  @Prop()
+  profileLink?: string;
+
+  @Prop()
+  address?: string;
+
+  @Prop()
+  barNumber?: string;
+
+  @Prop()
+  notes?: string;
 }
+
 export const LawyerSchema = SchemaFactory.createForClass(Lawyer);

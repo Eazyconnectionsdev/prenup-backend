@@ -1,12 +1,21 @@
 // src/cases/lawyers.service.ts
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
+import { Company, CompanyDocument } from './schemas/company.schema';
 
 @Injectable()
 export class LawyersService {
-  constructor(@InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>) {}
+  constructor(
+    @InjectModel(Lawyer.name)
+    private readonly lawyerModel: Model<LawyerDocument>,
+
+    @InjectModel(Company.name)
+    private readonly companyModel: Model<CompanyDocument>,
+  ) {}
+
+  /* ---------------- SEED ---------------- */
 
   async seedInitialLawyersIfEmpty() {
     const count = await this.lawyerModel.countDocuments().exec();
@@ -23,15 +32,56 @@ export class LawyersService {
       { externalId: '9', name: 'Bethan Hill-Howells', priceText: '£300 + VAT', avatarUrl: 'https://i.pravatar.cc/200?img=10' },
       { externalId: '10', name: 'Helen Boynton', priceText: '£300 + VAT', avatarUrl: 'https://i.pravatar.cc/200?img=52' },
     ];
+
     await this.lawyerModel.insertMany(lawyers);
     return { seeded: true, count: lawyers.length };
   }
 
+  /* ---------------- CREATE ---------------- */
+
+  async create(companyId: string, payload: Partial<Lawyer>) {
+    if (!Types.ObjectId.isValid(companyId)) {
+      throw new BadRequestException('Invalid companyId');
+    }
+
+    const company = await this.companyModel.findById(companyId).exec();
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+
+    // Optional: prevent duplicate lawyer names under same company
+    const exists = await this.lawyerModel.findOne({
+      name: payload.name,
+      company: company._id,
+    });
+
+    if (exists) {
+      throw new BadRequestException('Lawyer already exists for this company');
+    }
+
+    const lawyer = new this.lawyerModel({
+      ...payload,
+      company: company._id,
+      createdBy: 'admin', // optional audit field
+    });
+
+    return lawyer.save();
+  }
+
+  /* ---------------- READ ---------------- */
+
   async listAll() {
-    return this.lawyerModel.find().lean().exec();
+    return this.lawyerModel
+      .find()
+      .populate('company', 'name')
+      .lean()
+      .exec();
   }
 
   async findById(id: string) {
-    return this.lawyerModel.findById(id).exec();
+    return this.lawyerModel
+      .findById(id)
+      .populate('company', 'name')
+      .exec();
   }
 }

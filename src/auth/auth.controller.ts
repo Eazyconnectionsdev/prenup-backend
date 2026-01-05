@@ -1,22 +1,13 @@
 // auth.controller.ts
-import {
-  Body,
-  Controller,
-  ForbiddenException,
-  Get,
-  HttpCode,
-  Post,
-  Query,
-  Res,
-} from '@nestjs/common';
-import { Response } from 'express';
+import { Body, Controller, ForbiddenException, Get, HttpCode, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { CasesService } from '../cases/cases.service';
-
+import { JwtAuthGuard } from '../common/jwt-auth.guard';
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -180,5 +171,12 @@ export class AuthController {
       message: 'Invite accepted, user registered',
       ...result,
     };
+  }
+
+
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  me(@Req() req) {
+    return req.user; // make sure sensitive fields are filtered out upstream
   }
 }
