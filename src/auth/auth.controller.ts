@@ -1,5 +1,14 @@
 // auth.controller.ts
-import { Body, Controller, ForbiddenException, Get, HttpCode, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
 import { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -10,48 +19,38 @@ import { CasesService } from '../cases/cases.service';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService, private casesService: CasesService) { }
+  constructor(
+    private authService: AuthService,
+    private casesService: CasesService,
+  ) {}
 
   @Post('register')
-  async register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.register(
-      dto.email,
-      dto.password,
-      dto.firstName,
-      dto.middleName,
-      dto.lastName,
-      dto.role || 'end_user',
-      dto.endUserType,
-      dto.phone,
-      dto.marketingConsent ?? false,
-      !!dto.acceptedTerms,
-    );
+  async register(
+    @Body() dto: RegisterDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { token, expiresAt, ...payload } =
+      await this.authService.register(dto);
 
-    // If register returned a token, set it as HttpOnly cookie and return body without token
-    if (result && (result as any).token) {
-      const token = (result as any).token as string;
-      const expiresAt = (result as any).expiresAt as number | undefined;
-      const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : 7 * 24 * 60 * 60 * 1000;
+    // set cookie if token exists
+    if (token) {
+      const maxAge = expiresAt
+        ? Math.max(0, expiresAt - Date.now())
+        : 7 * 24 * 60 * 60 * 1000;
 
-      const cookieOptions = {
+      res.cookie('access_token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production', // requires HTTPS in prod
-        sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
         maxAge,
         path: '/',
-      };
-
-      res.cookie('access_token', token, cookieOptions);
-
-      // remove token from returned body
-      const { token: _t, ...rest } = result as any;
-      return rest;
+      });
     }
 
-    return result;
+    return payload;
   }
-  // LOGIN: set cookie using passthrough so we can still return JSON
-  @HttpCode(200)
+
+  
   @Post('login')
   async login(
     @Body() dto: LoginDto,
@@ -62,45 +61,50 @@ export class AuthController {
       return { error: 'Invalid credentials' };
     }
 
-    // 🔹 Fetch user's case
     const userCase = await this.casesService.findByUserId(user._id);
-    // OR: findByParticipantEmail(user.email)
-    // OR: findFirstCaseForUser(user._id)
     const signed = this.authService.signUser(user);
     const token = signed.token;
     const expiresAt = signed.expiresAt;
-    const maxAge = expiresAt ? Math.max(0, expiresAt - Date.now()) : 7 * 24 * 60 * 60 * 1000;
+    const maxAge = expiresAt
+      ? Math.max(0, expiresAt - Date.now())
+      : 7 * 24 * 60 * 60 * 1000;
 
     res.cookie('access_token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+      sameSite:
+        process.env.NODE_ENV === 'production'
+          ? ('none' as const)
+          : ('lax' as const),
       maxAge,
       path: '/',
     });
 
     // Build response matching register's shape (no token in JSON)
     return {
-      _id: user._id?.toString ? user._id.toString() : user._id,
-      email: user.email,
-      firstName: (user as any).firstName,
-      middleName: (user as any).middleName,
-      lastName: (user as any).lastName,
-      suffix: (user as any).suffix,
-      dateOfBirth: (user as any).dateOfBirth ? (user as any).dateOfBirth.toISOString() : null,
-      role: user.role,
-      endUserType: user.endUserType,
-      phone: (user as any).phone,
-      marketingConsent: !!(user as any).marketingConsent,
-      acceptedTerms: !!(user as any).acceptedTerms,
+      user: {
+        _id: user._id?.toString ? user._id.toString() : user._id,
+        firstName: user?.firstName,
+        middleName: user?.middleName,
+        lastName: user?.lastName,
+        email: user.email,
+        phone: user?.phone,
+        fianceDetails: user?.fianceDetails || {},
+        suffix: user?.suffix,
+        dateOfBirth: user?.dateOfBirth ? user?.dateOfBirth.toISOString() : null,
+        role: user.role,
+        endUserType: user.endUserType,
+        acceptedTerms: !!user?.acceptedTerms,
+        marketingConsent: !!user?.marketingConsent,
+      },
       caseId:
         userCase && (userCase._id || userCase.id)
-          ? (userCase._id ? userCase._id.toString() : userCase.id.toString())
+          ? userCase._id
+            ? userCase._id.toString()
+            : userCase.id.toString()
           : null,
     };
   }
-
-
 
   // LOGOUT: clear cookie
   @Post('logout')
@@ -108,7 +112,10 @@ export class AuthController {
     res.clearCookie('access_token', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const,
+      sameSite:
+        process.env.NODE_ENV === 'production'
+          ? ('none' as const)
+          : ('lax' as const),
       path: '/',
     });
     return { success: true };
@@ -159,7 +166,10 @@ export class AuthController {
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' as const : 'lax' as const,
+        sameSite:
+          process.env.NODE_ENV === 'production'
+            ? ('none' as const)
+            : ('lax' as const),
         maxAge: 7 * 24 * 60 * 60 * 1000,
         path: '/',
       };

@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 
 import { JwtService } from '@nestjs/jwt';
 import crypto from 'crypto';
@@ -28,30 +33,35 @@ export class AuthService {
     private mailService: MailService,
     private config: ConfigService,
     private casesService: CasesService,
-  ) { }
-  async register(
-    email: string,
-    password: string,
-    firstName?: string,
-    middleName?: string,
-    lastName?: string,
-    role = 'end_user',
-    endUserType?: string,
-    phone?: string,                  // new
-    marketingConsent = false,        // new
-    acceptedTerms = false,           // new - required
-  ) {
-    // require terms to be accepted
+  ) {}
+
+  async register(dto: any) {
+    const {
+      email,
+      password,
+      firstName,
+      middleName,
+      lastName,
+      role = 'end_user',
+      endUserType,
+      phone,
+      marketingConsent = false,
+      acceptedTerms,
+    } = dto;
+
     if (!acceptedTerms) {
-      throw new BadRequestException('You must accept the Terms & Conditions and Privacy Policy');
+      throw new BadRequestException(
+        'You must accept the Terms & Conditions and Privacy Policy',
+      );
     }
 
     const existing = await this.usersService.findByEmail(email);
-    if (existing) throw new BadRequestException('Email already registered');
+    if (existing) {
+      throw new BadRequestException('Email already registered');
+    }
 
     const passwordHash = await this.usersService.hashPassword(password);
 
-    // create user — include new fields
     const user = await this.usersService.create({
       email: email.toLowerCase(),
       passwordHash,
@@ -60,62 +70,72 @@ export class AuthService {
       lastName,
       role,
       endUserType,
-      phone: phone ? phone.trim() : undefined,
+      phone: phone?.trim(),
       marketingConsent: !!marketingConsent,
-      acceptedTerms: true, // record that user accepted terms
-    } as any);
+      acceptedTerms: true,
+    });
 
-    // Automatically create a case for this user
-    const newCase = await this.casesService.create(user._id.toString());
+    const userCase = await this.casesService.create(user._id.toString());
 
-    const signedUser = this.signUser(user);
+    const signed = this.signUser(user);
 
     return {
-    _id: user._id.toString(),
-    email: user.email,
-    firstName: user.firstName,
-    middleName: user.middleName,
-    lastName: user.lastName,
-    suffix: user.suffix,
-    dateOfBirth: user.dateOfBirth ? user.dateOfBirth.toISOString() : null,
-    role: user.role,
-    endUserType: user.endUserType,
-    phone: user.phone,
-    marketingConsent: user.marketingConsent,
-    acceptedTerms: user.acceptedTerms,
-    token: signedUser.token,
-    caseId: newCase._id.toString(),
-  };
+      token: signed.token,
+      expiresAt: signed.expiresAt,
+
+      user: {
+        _id: user._id?.toString ? user._id.toString() : user._id,
+        firstName: user?.firstName,
+        middleName: user?.middleName,
+        lastName: user?.lastName,
+        email: user.email,
+        phone: user?.phone,
+        fianceDetails: user?.fianceDetails || {},
+        suffix: user?.suffix,
+        dateOfBirth: user?.dateOfBirth ? user.dateOfBirth.toISOString() : null,
+        role: user.role,
+        endUserType: user.endUserType,
+        acceptedTerms: !!user?.acceptedTerms,
+        marketingConsent: !!user?.marketingConsent,
+      },
+
+      caseId:
+        userCase && (userCase._id || userCase.id)
+          ? userCase._id
+            ? userCase._id.toString()
+            : userCase.id.toString()
+          : null,
+    };
   }
 
-  // auth.service.ts
-signUser(user: any): SignedUser {
-  const payload = { id: user._id.toString(), role: user.role };
-  const token = this.jwtService.sign(payload);
+  signUser(user: any): SignedUser {
+    const payload = { id: user._id.toString(), role: user.role };
+    const token = this.jwtService.sign(payload);
 
-  const decoded: any = this.jwtService.decode(token);
-  const expiresAt =
-    decoded?.exp
+    const decoded: any = this.jwtService.decode(token);
+    const expiresAt = decoded?.exp
       ? decoded.exp * 1000
       : Date.now() + 7 * 24 * 60 * 60 * 1000;
 
-  return {
-    token,
-    expiresAt,
-    user: {
-      id: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      endUserType: user.endUserType,
-    },
-  };
-}
-
+    return {
+      token,
+      expiresAt,
+      user: {
+        id: user._id.toString(),
+        email: user.email,
+        role: user.role,
+        endUserType: user.endUserType,
+      },
+    };
+  }
 
   async validateUser(email: string, password: string) {
     const user = await this.usersService.findByEmail(email);
     if (!user) return null;
-    const ok = await this.usersService.comparePassword(password, user.passwordHash);
+    const ok = await this.usersService.comparePassword(
+      password,
+      user.passwordHash,
+    );
     if (!ok) return null;
     return user;
   }
@@ -127,7 +147,10 @@ signUser(user: any): SignedUser {
       return;
     }
     const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000);
+    const expires = new Date(
+      Date.now() +
+        Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
+    );
     await this.usersService.setResetToken(user._id.toString(), token, expires);
     const resetUrl = `${this.config.get('APP_BASE_URL')}/auth/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
     await this.mailService.sendReset(user.email, resetUrl);
@@ -136,21 +159,34 @@ signUser(user: any): SignedUser {
   async resetPassword(email: string, token: string, newPassword: string) {
     const user = await this.usersService.findByEmail(email);
     if (!user) throw new NotFoundException('User not found');
-    if (!user.resetPasswordToken || user.resetPasswordToken !== token) throw new BadRequestException('Invalid token');
-    if (!user.resetPasswordExpires || user.resetPasswordExpires < new Date()) throw new BadRequestException('Token expired');
+    if (!user.resetPasswordToken || user.resetPasswordToken !== token)
+      throw new BadRequestException('Invalid token');
+    if (!user.resetPasswordExpires || user.resetPasswordExpires < new Date())
+      throw new BadRequestException('Token expired');
     const hash = await this.usersService.hashPassword(newPassword);
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
-  
+
   // inside AuthService (or the service that has acceptInvite)
-  async acceptInvite(caseId: string, token: string, email: string, password?: string, name?: string) {
+  async acceptInvite(
+    caseId: string,
+    token: string,
+    email: string,
+    password?: string,
+    name?: string,
+  ) {
     // 1) validate case & invite token
     const caseDoc = await this.casesService.findById(caseId);
     if (!caseDoc) throw new BadRequestException('Invalid case or invite');
-    if (!caseDoc.inviteToken || caseDoc.inviteToken !== token) throw new BadRequestException('Invalid token');
-    if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date()) throw new BadRequestException('Invite expired');
+    if (!caseDoc.inviteToken || caseDoc.inviteToken !== token)
+      throw new BadRequestException('Invalid token');
+    if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date())
+      throw new BadRequestException('Invite expired');
 
-    if (!caseDoc.invitedEmail || caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()) {
+    if (
+      !caseDoc.invitedEmail ||
+      caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()
+    ) {
       throw new BadRequestException('Invite email mismatch');
     }
 
@@ -184,9 +220,11 @@ signUser(user: any): SignedUser {
 
     // 6) defensive check: ensure we have an id to attach
     const createdId =
-      (user && (user as any)._id) ? (user as any)._id.toString() :
-        (user && (user as any).id) ? (user as any).id.toString() :
-          null;
+      user && (user as any)._id
+        ? (user as any)._id.toString()
+        : user && (user as any).id
+          ? (user as any).id.toString()
+          : null;
 
     if (!createdId) {
       // dump user for debugging (don't leave verbose logging in production if it contains sensitive data)
@@ -206,19 +244,26 @@ signUser(user: any): SignedUser {
 
     // 9) Send email with credentials (catch errors but don't crash the whole flow if email fails)
     try {
-      await this.mailService.sendInviteCredentials(email, userPassword, caseDoc._id.toString());
+      await this.mailService.sendInviteCredentials(
+        email,
+        userPassword,
+        caseDoc._id.toString(),
+      );
     } catch (err) {
       // log the email failure but continue — inviter can still fetch stored creds
-      this.logger?.error?.('Failed to send invite credentials email', err as any);
+      this.logger?.error?.(
+        'Failed to send invite credentials email',
+        err as any,
+      );
     }
 
     // 10) return signed user (token) or whatever signUser does
     return this.signUser(user);
   }
 
-
   generateRandomPassword(length = 12): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+    const chars =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
     let result = '';
     for (let i = 0; i < length; i++) {
       result += chars.charAt(Math.floor(Math.random() * chars.length));
