@@ -1,5 +1,18 @@
-// auth.controller.ts
-import { Body, Controller, ForbiddenException, Get, HttpCode, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+// src/auth/auth.controller.ts
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -8,48 +21,38 @@ import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { CasesService } from '../cases/cases.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResendOtpDto } from './dto/resend-otp.dto';
+import { UsersService } from '../users/users.service';
+
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
     private casesService: CasesService,
+    private usersService: UsersService,
   ) {}
 
   @Post('register')
-  async register(
-    @Body() dto: RegisterDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const { token, expiresAt, ...payload } =
-      await this.authService.register(dto);
-
-    // set cookie if token exists
-    if (token) {
-      const maxAge = expiresAt
-        ? Math.max(0, expiresAt - Date.now())
-        : 7 * 24 * 60 * 60 * 1000;
-
-      res.cookie('access_token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-        maxAge,
-        path: '/',
-      });
-    }
-
-    return payload;
+  @HttpCode(201)
+  async register(@Body() dto: RegisterDto) {
+    const result = await this.authService.registerAndSendOtp(dto);
+    return {
+      message: 'Registration successful. An OTP has been sent to your email for verification.',
+      email: result.email,
+      expiresAt: result.expiresAt,
+    };
   }
 
-  
   @Post('login')
-  async login(
-    @Body() dto: LoginDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
+  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const user = await this.authService.validateUser(dto.email, dto.password);
     if (!user) {
       return { error: 'Invalid credentials' };
+    }
+
+    if (!user.emailVerified) {
+      return { error: 'Email not verified. Please verify via OTP sent to your email.' };
     }
 
     const userCase = await this.casesService.findByUserId(user._id);
@@ -64,14 +67,11 @@ export class AuthController {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite:
-        process.env.NODE_ENV === 'production'
-          ? ('none' as const)
-          : ('lax' as const),
+        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
       maxAge,
       path: '/',
     });
 
-    // Build response matching register's shape (no token in JSON)
     return {
       user: {
         _id: user._id?.toString ? user._id.toString() : user._id,
@@ -97,16 +97,13 @@ export class AuthController {
     };
   }
 
-  // LOGOUT: clear cookie
   @Post('logout')
   async logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie('access_token', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite:
-        process.env.NODE_ENV === 'production'
-          ? ('none' as const)
-          : ('lax' as const),
+        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
       path: '/',
     });
     return { success: true };
@@ -124,7 +121,6 @@ export class AuthController {
     return { message: 'Password reset successful' };
   }
 
-  // Accept-invite: create user and also sign-cookie
   @Get('accept-invite')
   async acceptInvite(
     @Query('token') token: string,
@@ -144,23 +140,14 @@ export class AuthController {
       throw new ForbiddenException('Invalid or expired invite token');
     }
 
-    const result = await this.authService.acceptInvite(
-      caseId,
-      token,
-      email,
-      password,
-      name,
-    );
+    const result = await this.authService.acceptInvite(caseId, token, email, password, name);
 
-    // if Response provided (it will be), set cookie
     if (res && result && result.token) {
       const cookieOptions = {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite:
-          process.env.NODE_ENV === 'production'
-            ? ('none' as const)
-            : ('lax' as const),
+          process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
         maxAge: 7 * 24 * 60 * 60 * 1000,
         path: '/',
       };
@@ -173,10 +160,69 @@ export class AuthController {
     };
   }
 
+  @Post('verify-otp')
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
+
+    const token = signed.token;
+    const expiresAt = signed.expiresAt;
+    const maxAge = expiresAt
+      ? Math.max(0, expiresAt - Date.now())
+      : 7 * 24 * 60 * 60 * 1000;
+
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite:
+        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+      maxAge,
+      path: '/',
+    });
+
+    // fetch full user document using UsersService
+    const userId = signed.user.id;
+    const userDoc = await this.usersService.findById(userId);
+    if (!userDoc) {
+      throw new NotFoundException('User not found after verification');
+    }
+
+    // pass the actual ObjectId to findByUserId to satisfy typing
+    const userCase = await this.casesService.findByUserId(userDoc._id);
+
+    return {
+      user: {
+        _id: userDoc._id?.toString ? userDoc._id.toString() : userDoc._id,
+        firstName: userDoc?.firstName,
+        middleName: userDoc?.middleName,
+        lastName: userDoc?.lastName,
+        email: userDoc.email,
+        phone: userDoc?.phone,
+        fianceDetails: userDoc?.fianceDetails || {},
+        suffix: userDoc?.suffix,
+        dateOfBirth: userDoc?.dateOfBirth ? userDoc.dateOfBirth.toISOString() : null,
+        role: userDoc.role,
+        endUserType: userDoc.endUserType,
+        acceptedTerms: !!userDoc?.acceptedTerms,
+        marketingConsent: !!userDoc?.marketingConsent,
+      },
+      caseId:
+        userCase && (userCase._id || userCase.id)
+          ? userCase._id
+            ? userCase._id.toString()
+            : userCase.id.toString()
+          : null,
+    };
+  }
+
+  @Post('resend-otp')
+  async resendOtp(@Body() dto: ResendOtpDto) {
+    await this.authService.resendRegistrationOtp(dto.email);
+    return { message: 'If that email exists and is unverified, a new OTP was sent.' };
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
   me(@Req() req) {
-    return req.user; // make sure sensitive fields are filtered out upstream
+    return req.user;
   }
 }
