@@ -1,3 +1,4 @@
+// src/users/user.schema.ts (or wherever your User schema file is located)
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
@@ -95,9 +96,19 @@ export class User {
   @Prop({ type: Boolean, required: true })
   acceptedTerms: boolean;
 
-  // ✅ Embedded Fiancé Details (same collection)
+  // Embedded Fiancé Details (same collection)
   @Prop({ type: FianceDetailsSchema, default: null })
   fianceDetails?: FianceDetails | null;
+
+  // ---------- NEW fields for email OTP verification ----------
+  @Prop({ type: Boolean, default: false })
+  emailVerified?: boolean;
+
+  @Prop({ type: String, default: null })
+  emailVerificationOtp?: string | null;
+
+  @Prop({ type: Date, default: null })
+  emailVerificationOtpExpires?: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

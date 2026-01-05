@@ -13,25 +13,25 @@ export class MailService implements OnModuleInit {
   constructor(private config: ConfigService) {}
 
   onModuleInit() {
-    // Validate required env variables early
     const accessKey = this.config.get<string>('AWS_ACCESS_KEY');
     const secretKey = this.config.get<string>('AWS_SECRET_ACCESS_KEY');
     const region = this.config.get<string>('AWS_REGION');
-    const from = this.config.get<string>('EMAIL_USER');
+    const from = this.config.get<string>('EMAIL_USER') || this.config.get('MAIL_FROM');
 
     this.fromAddress = from?.trim() || null;
 
+    // If AWS SES details not provided, fallback to JSON transport (development)
     if (!accessKey || !secretKey || !region) {
-      this.logger.error('AWS SES credentials/region are not fully configured. Mail will not work.');
-      throw new Error('AWS SES not configured. Please set AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY and AWS_REGION.');
+      this.logger.warn('AWS SES not fully configured; using noop/json transporter for emails (development mode).');
+      this.transporter = nodemailer.createTransport({ jsonTransport: true } as any);
+      return;
     }
 
     if (!this.fromAddress) {
-      this.logger.error('EMAIL_USER is not configured. Mail will not work.');
-      throw new Error('EMAIL_USER not configured. Please set EMAIL_USER to a verified SES identity.');
+      this.logger.error('EMAIL_USER or MAIL_FROM is not configured; Mail will not work.');
+      throw new Error('EMAIL_USER or MAIL_FROM not configured. Please set a verified SES identity.');
     }
 
-    // Configure AWS SDK
     AWS.config.update({
       accessKeyId: accessKey,
       secretAccessKey: secretKey,
@@ -40,7 +40,6 @@ export class MailService implements OnModuleInit {
 
     const ses = new AWS.SES({ apiVersion: '2010-12-01' });
 
-    // Create Nodemailer SES transporter
     this.transporter = nodemailer.createTransport({
       SES: { ses, aws: AWS },
     });
@@ -48,7 +47,6 @@ export class MailService implements OnModuleInit {
     this.logger.log(`MailService initialized (SES region=${region}, from=${this.fromAddress})`);
   }
 
-  // Generic mail sender used by specific helpers
   private async sendMail(opts: {
     to: string;
     subject: string;
@@ -73,7 +71,7 @@ export class MailService implements OnModuleInit {
       throw new Error('Invalid recipient email');
     }
 
-    const mailOptions = {
+    const mailOptions: any = {
       from: this.fromAddress,
       to,
       subject,
@@ -84,7 +82,7 @@ export class MailService implements OnModuleInit {
 
     try {
       const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Email sent: ${info && info.messageId ? info.messageId : 'no-message-id' } to=${to} subject=${subject}`);
+      this.logger.log(`Email sent: ${info && (info as any).messageId ? (info as any).messageId : 'no-message-id' } to=${to} subject=${subject}`);
       return info;
     } catch (err) {
       this.logger.error(`Failed to send email to ${to} subject=${subject}`, err as any);
@@ -92,70 +90,47 @@ export class MailService implements OnModuleInit {
     }
   }
 
-  /**
-   * Send invite email containing a link
-   */
-  async sendInvite(to: string, inviteUrl: string) {
-    if (!inviteUrl || typeof inviteUrl !== 'string') {
-      this.logger.error('Invalid inviteUrl passed to sendInvite', inviteUrl);
-      throw new Error('Invalid invite URL');
-    }
+  // Send verification OTP to email
+  async sendVerificationOtp(email: string, otp: string, opts?: { expiresAt?: Date }) {
+    const expiryText = opts?.expiresAt ? `This OTP will expire at ${opts.expiresAt.toISOString()}` : '';
+    const subject = 'Your verification code';
+    const text = `Your verification code is: ${otp}\n\n${expiryText}\n\nIf you did not request this, please ignore this email.`;
+    const html = `<p>Your verification code is: <strong>${otp}</strong></p>
+                  ${opts?.expiresAt ? `<p>Expires: ${opts.expiresAt.toISOString()}</p>` : ''}
+                  <p>If you did not request this, please ignore this email.</p>`;
 
-    const subject = 'You are invited to a Wenup case';
+    return this.sendMail({ to: email, subject, text, html });
+  }
+
+  // Send password reset link
+  async sendReset(email: string, resetUrl: string) {
+    const subject = 'Password reset instructions';
+    const text = `You requested a password reset. Click the link below to reset your password:\n\n${resetUrl}\n\nIf you did not request this, ignore this email.`;
+    const html = `<p>You requested a password reset. Click the link below to reset your password:</p>
+                  <p><a href="${resetUrl}">${resetUrl}</a></p>
+                  <p>If you did not request this, ignore this email.</p>`;
+    return this.sendMail({ to: email, subject, text, html });
+  }
+
+  // Send invite link
+  async sendInvite(to: string, inviteUrl: string) {
+    const subject = 'You are invited';
     const text = `You have been invited. Accept: ${inviteUrl}`;
     const html = `<p>You have been invited. Accept: <a href="${inviteUrl}">${inviteUrl}</a></p>`;
-
     return this.sendMail({ to, subject, text, html });
   }
 
-  /**
-   * Send password reset link
-   */
-  async sendReset(to: string, resetUrl: string) {
-    if (!resetUrl || typeof resetUrl !== 'string') {
-      this.logger.error('Invalid resetUrl passed to sendReset', resetUrl);
-      throw new Error('Invalid reset URL');
-    }
-
-    const subject = 'Reset your password';
-    const text = `Reset link: ${resetUrl}`;
-    const html = `<p>Reset link: <a href="${resetUrl}">${resetUrl}</a></p>`;
-
-    return this.sendMail({ to, subject, text, html });
-  }
-
-  /**
-   * Send generated credentials to invited user (must include from in transporter)
-   * NOTE: Prefer sending a set-password link rather than plaintext password where possible.
-   */
-  async sendInviteCredentials(to: string, password: string, caseId: string) {
-    if (!to || !password) {
-      this.logger.error('Invalid arguments to sendInviteCredentials', { to, caseId });
-      throw new Error('Invalid arguments for invite credentials email');
-    }
-
-    const subject = 'You have been invited to a case';
-    const text = `
-Hello,
-
-You have been invited to a case (ID: ${caseId}).
-
-Your login credentials:
-Email: ${to}
-Password: ${password}
-
-Please log in and update your password immediately.
-    `;
-
-    const html = `
-<p>Hello,</p>
-<p>You have been invited to a case (ID: <strong>${caseId}</strong>).</p>
-<p><strong>Login credentials</strong><br/>
-Email: ${to}<br/>
-Password: ${password}</p>
-<p>Please log in and update your password immediately.</p>
-    `;
-
+  // Send invite credentials (plaintext password — consider sending a set-password link instead)
+  async sendInviteCredentials(to: string, password: string, caseId?: string) {
+    const subject = 'You have been invited — sign-in details';
+    const text = `You were invited to join. Use the credentials below to sign in:\n\nEmail: ${to}\nPassword: ${password}\n\nWe recommend you change your password after sign-in.`;
+    const html = `<p>You were invited to join. Use the credentials below to sign in:</p>
+                  <ul>
+                    <li><strong>Email:</strong> ${to}</li>
+                    <li><strong>Password:</strong> ${password}</li>
+                  </ul>
+                  <p>We recommend you change your password after sign-in.</p>
+                  ${caseId ? `<p>Case ID: ${caseId}</p>` : ''}`;
     return this.sendMail({ to, subject, text, html });
   }
 }
