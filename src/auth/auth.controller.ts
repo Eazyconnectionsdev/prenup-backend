@@ -87,6 +87,8 @@ export class AuthController {
         endUserType: user.endUserType,
         acceptedTerms: !!user?.acceptedTerms,
         marketingConsent: !!user?.marketingConsent,
+        // <-- new payment lock flag
+        paymentDone: !!(user as any)?.paymentDone,
       },
       caseId:
         userCase && (userCase._id || userCase.id)
@@ -186,7 +188,7 @@ export class AuthController {
       throw new NotFoundException('User not found after verification');
     }
 
-    // pass the actual ObjectId to findByUserId to satisfy typing
+    // pass the actual ObjectId to findByUserId (avoid string -> ObjectId type issues)
     const userCase = await this.casesService.findByUserId(userDoc._id);
 
     return {
@@ -204,6 +206,8 @@ export class AuthController {
         endUserType: userDoc.endUserType,
         acceptedTerms: !!userDoc?.acceptedTerms,
         marketingConsent: !!userDoc?.marketingConsent,
+        // <-- new payment lock flag
+        paymentDone: !!(userDoc as any)?.paymentDone,
       },
       caseId:
         userCase && (userCase._id || userCase.id)
