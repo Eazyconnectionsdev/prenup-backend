@@ -115,178 +115,112 @@ export class CasesController {
     const user = this.ensureUser(req);
     return this.casesService.attachInvitedUser(id, user.id);
   }
-  // inside your controller file (replace existing getStep)
-  @UseGuards(JwtAuthGuard)
-  @Get(':id/steps/:stepNumber')
-  async getStep(@Req() req, @Param('id') id: string, @Param('stepNumber') stepNumberStr: string) {
-    const user = this.ensureUser(req);
-    const isPrivileged = this.isPrivilegedRole(user.role);
+@UseGuards(JwtAuthGuard)
+@Get(':id/steps/:stepNumber')
+async getStep(@Req() req, @Param('id') id: string, @Param('stepNumber') stepNumberStr: string) {
+  const user = this.ensureUser(req);
+  const isPrivileged = this.isPrivilegedRole(user.role);
 
-    const c = await this.casesService.findById(id, isPrivileged);
-    if (!c) throw new NotFoundException('Case not found');
+  const c = await this.casesService.findById(id, isPrivileged);
+  if (!c) throw new NotFoundException('Case not found');
 
-    // Access check for non-admins
-    if (!isPrivileged) {
-      const userIdStr = (user.id ?? user._id)?.toString();
-      if (c.owner?.toString() !== userIdStr && c.invitedUser?.toString() !== userIdStr) {
-        throw new ForbiddenException('Forbidden');
-      }
+  // Access check for non-admins
+  if (!isPrivileged) {
+    const userIdStr = (user.id ?? user._id)?.toString();
+    if (c.owner?.toString() !== userIdStr && c.invitedUser?.toString() !== userIdStr) {
+      throw new ForbiddenException('Forbidden');
     }
-
-    const stepNumber = Number(stepNumberStr);
-    if (!Number.isInteger(stepNumber) || stepNumber < 1 || stepNumber > 7) {
-      throw new BadRequestException('Invalid step number');
-    }
-
-    const key = `step${stepNumber}`;
-
-    // helper: returns a fully-shaped template for each step
-    const getEmptyStepTemplate = (n: number) => {
-      switch (n) {
-        case 1:
-        case 3: // step3 mirrors step1
-          return {
-            firstName: null,
-            middleNames: null,
-            lastName: null,
-            dateOfBirth: null,
-            address: null,
-            dateOfMarriage: null,
-            hasChildren: false,
-            fluentInEnglish: false,
-            nationality: null,
-            domicileResidencyStatus: null,
-            occupation: null,
-            incomeGBP: null,
-            overviewAim: null,
-            currentLivingSituation: null,
-            confirm_wenup_platform_used: false,
-            property_personal_possessions_remain: false,
-            family_home_divided_equally: false,
-            court_can_depart_for_children: false,
-            agree_costs_shared: false,
-          };
-        case 2:
-        case 4: // step4 mirrors step2
-          return {
-            separateEarnings: false,
-            earningsEntries: [],
-            separateProperties: false,
-            propertyEntries: [],
-            separateSavings: false,
-            savingsEntries: [],
-            separatePensions: false,
-            pensionEntries: [],
-            separateDebts: false,
-            debtEntries: [],
-            separateBusinesses: false,
-            businessEntries: [],
-            separateChattels: false,
-            chattelEntries: [],
-            separateOtherAssets: false,
-            otherAssetEntries: [],
-          };
-        case 5:
-          return {
-            sharedEarnings: false,
-            sharedEarningsDetails: {},
-            sharedDebts: false,
-            sharedDebtsDetails: {},
-            sharedBusinesses: false,
-            sharedBusinessesDetails: {},
-            sharedChattels: false,
-            sharedChattelsDetails: {},
-            sharedOtherAssets: false,
-            sharedOtherAssetsDetails: {},
-            liveInRentedOrOwned: false,
-            sharedSavings: false,
-            sharedPensions: false,
-          };
-        case 6:
-          return {
-            inheritanceConsideredSeparate: false,
-            giftConsideredSeparate: false,
-            futureAssetsTreatedJointOrSeparate: false,
-            willBeSameAsDivorceSplit: false,
-            wantWillHelp: false,
-            person1FutureInheritance: {
-              originalAmount: null,
-              originalCurrency: null,
-              gbpEquivalent: null,
-              basisOfEstimate: null,
-            },
-            person2FutureInheritance: {
-              originalAmount: null,
-              originalCurrency: null,
-              gbpEquivalent: null,
-              basisOfEstimate: null,
-            },
-          };
-        case 7:
-          return {
-            isOnePregnant: false,
-            isOnePregnantOverview: null,
-            businessWorkedTogether: false,
-            businessWorkedTogetherOverview: null,
-            oneOutOfWorkOrDependent: false,
-            oneOutOfWorkOverview: null,
-            familyHomeOwnedWith3rdParty: false,
-            familyHome3rdPartyOverview: null,
-            combinedAssetsOver3m: false,
-            combinedAssetsOver3mOverview: null,
-            childFromPreviousRelationshipsLivingWithYou: false,
-            childFromPreviousOverview: null,
-            additionalComplexities: {},
-          };
-        default:
-          return {};
-      }
-    };
-
-    // helper: normalized default status
-    const defaultStepStatus = () => ({
-      submitted: false,
-      submittedBy: null,
-      submittedAt: null,
-      locked: false,
-      lockedBy: null,
-      lockedAt: null,
-      unlockedBy: null,
-      unlockedAt: null,
-    });
-
-    // stored data (may be partial)
-    const storedStepData = (c as any)[key] ?? {};
-    const template = getEmptyStepTemplate(stepNumber);
-
-    // Merge stored values into the template (shallow merge; nested arrays/objects are replaced by stored value)
-    const mergedData = { ...template, ...storedStepData };
-
-    // pick status (if stored) or default
-    const rawStatus = (c.status && (c.status as any)[key]) || {};
-    const stepStatus = {
-      submitted: !!rawStatus.submitted,
-      submittedBy: rawStatus.submittedBy ? rawStatus.submittedBy.toString() : null,
-      submittedAt: rawStatus.submittedAt ? rawStatus.submittedAt : null,
-      locked: !!rawStatus.locked,
-      lockedBy: rawStatus.lockedBy ? rawStatus.lockedBy.toString() : null,
-      lockedAt: rawStatus.lockedAt ? rawStatus.lockedAt : null,
-      unlockedBy: rawStatus.unlockedBy ? rawStatus.unlockedBy.toString() : null,
-      unlockedAt: rawStatus.unlockedAt ? rawStatus.unlockedAt : null,
-    };
-
-    // if there was no rawStatus, give the default shape
-    const finalStatus = Object.keys(stepStatus).every(k => stepStatus[k as keyof typeof stepStatus] === null || stepStatus[k as keyof typeof stepStatus] === false)
-      ? defaultStepStatus()
-      : stepStatus;
-
-    return {
-      stepNumber,
-      data: mergedData,
-      status: finalStatus,
-      fullyLocked: !!c.fullyLocked,
-    };
   }
+
+  const stepNumber = Number(stepNumberStr);
+  if (!Number.isInteger(stepNumber) || stepNumber < 1 || stepNumber > 7) {
+    throw new BadRequestException('Invalid step number');
+  }
+
+  const key = `step${stepNumber}`;
+
+  // convert to plain object and pick only the requested step & status
+  const doc = (c as any).toObject ? (c as any).toObject() : c;
+  const storedStepData = doc[key] ?? {};
+  const rawStatus = (doc.status && doc.status[key]) || {};
+
+  // step templates (shallow) — same as your schema defaults
+  const getEmptyStepTemplate = (n: number) => {
+    switch (n) {
+      case 1:
+      case 3:
+        return {
+          firstName: null, middleNames: null, lastName: null, dateOfBirth: null, address: null,
+          dateOfMarriage: null, hasChildren: false, fluentInEnglish: false, nationality: null,
+          domicileResidencyStatus: null, occupation: null, incomeGBP: null, overviewAim: null,
+          currentLivingSituation: null, confirm_wenup_platform_used: false,
+          property_personal_possessions_remain: false, family_home_divided_equally: false,
+          court_can_depart_for_children: false, agree_costs_shared: false,
+        };
+      case 2:
+      case 4:
+        return {
+          separateEarnings: false, earningsEntries: [], separateProperties: false, propertyEntries: [],
+          separateSavings: false, savingsEntries: [], separatePensions: false, pensionEntries: [],
+          separateDebts: false, debtEntries: [], separateBusinesses: false, businessEntries: [],
+          separateChattels: false, chattelEntries: [], separateOtherAssets: false, otherAssetEntries: [],
+        };
+      case 5:
+        return {
+          sharedEarnings: false, sharedEarningsDetails: {}, sharedDebts: false, sharedDebtsDetails: {},
+          sharedBusinesses: false, sharedBusinessesDetails: {}, sharedChattels: false, sharedChattelsDetails: {},
+          sharedOtherAssets: false, sharedOtherAssetsDetails: {}, liveInRentedOrOwned: false,
+          sharedSavings: false, sharedPensions: false,
+        };
+      case 6:
+        return {
+          inheritanceConsideredSeparate: false, giftConsideredSeparate: false,
+          futureAssetsTreatedJointOrSeparate: false, willBeSameAsDivorceSplit: false, wantWillHelp: false,
+          person1FutureInheritance: { originalAmount: null, originalCurrency: null, gbpEquivalent: null, basisOfEstimate: null },
+          person2FutureInheritance: { originalAmount: null, originalCurrency: null, gbpEquivalent: null, basisOfEstimate: null },
+        };
+      case 7:
+        return {
+          isOnePregnant: false, isOnePregnantOverview: null, businessWorkedTogether: false, businessWorkedTogetherOverview: null,
+          oneOutOfWorkOrDependent: false, oneOutOfWorkOverview: null, familyHomeOwnedWith3rdParty: false,
+          familyHome3rdPartyOverview: null, combinedAssetsOver3m: false, combinedAssetsOver3mOverview: null,
+          childFromPreviousRelationshipsLivingWithYou: false, childFromPreviousOverview: null, additionalComplexities: {},
+        };
+      default:
+        return {};
+    }
+  };
+
+  const mergedData = { ...getEmptyStepTemplate(stepNumber), ...storedStepData };
+
+  // normalize status (ObjectId -> string, dates preserved)
+  const statusNormalized = {
+    submitted: !!rawStatus.submitted,
+    submittedBy: rawStatus.submittedBy ? rawStatus.submittedBy.toString() : null,
+    submittedAt: rawStatus.submittedAt ? rawStatus.submittedAt : null,
+    locked: !!rawStatus.locked,
+    lockedBy: rawStatus.lockedBy ? rawStatus.lockedBy.toString() : null,
+    lockedAt: rawStatus.lockedAt ? rawStatus.lockedAt : null,
+    unlockedBy: rawStatus.unlockedBy ? rawStatus.unlockedBy.toString() : null,
+    unlockedAt: rawStatus.unlockedAt ? rawStatus.unlockedAt : null,
+  };
+
+  const defaultStatus = {
+    submitted: false, submittedBy: null, submittedAt: null,
+    locked: false, lockedBy: null, lockedAt: null,
+    unlockedBy: null, unlockedAt: null,
+  };
+
+  // if all fields are empty/false, return defaultStatus to keep shape consistent
+  const finalStatus = Object.values(statusNormalized).some(v => v !== null && v !== false) ? statusNormalized : defaultStatus;
+
+  return {
+    stepNumber,
+    data: mergedData,
+    status: finalStatus,
+    fullyLocked: !!doc.fullyLocked,
+  };
+}
 
   /** Update a specific step of a case
    * - Non-privileged end-users: must follow end-user step rules (which step types they can submit).
