@@ -59,7 +59,7 @@ const STEP6_QUESTIONS = [
 
 @Controller('cases')
 export class CasesController {
-  constructor(private casesService: CasesService, private lawyersService: LawyersService) {}
+  constructor(private casesService: CasesService, private lawyersService: LawyersService) { }
 
   private ensureUser(req: any) {
     const user = req.user;
@@ -252,23 +252,23 @@ export class CasesController {
       const uiQuestions = STEP5_QUESTIONS.map((q, idx) => ({
         question: q,
         answer: idx === 0 ? (mergedData.sharedEarnings ? 'yes' : 'no')
-               : idx === 1 ? (mergedData.liveInRentedOrOwned ? 'yes' : 'no')
-               : idx === 2 ? (mergedData.sharedSavings ? 'yes' : 'no')
-               : idx === 3 ? (mergedData.sharedPensions ? 'yes' : 'no')
-               : null,
+          : idx === 1 ? (mergedData.liveInRentedOrOwned ? 'yes' : 'no')
+            : idx === 2 ? (mergedData.sharedSavings ? 'yes' : 'no')
+              : idx === 3 ? (mergedData.sharedPensions ? 'yes' : 'no')
+                : null,
       }));
 
       const uiFollowUps = STEP5_FOLLOW_UPS.map((q, idx) => ({
         question: q,
         answer: idx === 0 ? (mergedData.sharedDebts ? 'yes' : 'no')
-               : idx === 1 ? (mergedData.sharedBusinesses ? 'yes' : 'no')
-               : idx === 2 ? (mergedData.sharedChattels ? 'yes' : 'no')
-               : idx === 3 ? (mergedData.sharedOtherAssets ? 'yes' : 'no')
-               : null,
+          : idx === 1 ? (mergedData.sharedBusinesses ? 'yes' : 'no')
+            : idx === 2 ? (mergedData.sharedChattels ? 'yes' : 'no')
+              : idx === 3 ? (mergedData.sharedOtherAssets ? 'yes' : 'no')
+                : null,
         details: idx === 0 ? (mergedData.sharedDebtsDetails || {}) :
-                 idx === 1 ? (mergedData.sharedBusinessesDetails || {}) :
-                 idx === 2 ? (mergedData.sharedChattelsDetails || {}) :
-                 idx === 3 ? (mergedData.sharedOtherAssetsDetails || {}) : {},
+          idx === 1 ? (mergedData.sharedBusinessesDetails || {}) :
+            idx === 2 ? (mergedData.sharedChattelsDetails || {}) :
+              idx === 3 ? (mergedData.sharedOtherAssetsDetails || {}) : {},
       }));
 
       return {
@@ -291,10 +291,10 @@ export class CasesController {
         question: q,
         answer:
           idx === 0 ? (mergedData.inheritanceConsideredSeparate ? 'yes' : 'no')
-          : idx === 1 ? (mergedData.giftConsideredSeparate ? 'yes' : 'no')
-          : idx === 2 ? (mergedData.futureAssetsTreatedJointOrSeparate ? 'yes' : 'no')
-          : idx === 3 ? (mergedData.willBeSameAsDivorceSplit ? 'yes' : 'no')
-          : null,
+            : idx === 1 ? (mergedData.giftConsideredSeparate ? 'yes' : 'no')
+              : idx === 2 ? (mergedData.futureAssetsTreatedJointOrSeparate ? 'yes' : 'no')
+                : idx === 3 ? (mergedData.willBeSameAsDivorceSplit ? 'yes' : 'no')
+                  : null,
       }));
 
       const uiPayload = {
@@ -423,7 +423,45 @@ export class CasesController {
       };
 
       validatedData = step5Payload;
+    }// SPECIAL CASE: map UI payload for step 7 into schema fields
+    if (stepNumber === 7) {
+      const mapped = {
+        isOnePregnant: !!body.pregnancy?.answer,
+        isOnePregnantOverview: body.pregnancy?.overview || null,
+
+        businessWorkedTogether: !!body.businessTogether?.answer,
+        businessWorkedTogetherOverview: body.businessTogether?.overview || null,
+
+        oneOutOfWorkOrDependent: !!body.outOfWorkDependent?.answer,
+        oneOutOfWorkOverview: body.outOfWorkDependent?.overview || null,
+
+        familyHomeOwnedWith3rdParty: !!body.familyHomeThirdParty?.answer,
+        familyHome3rdPartyOverview: body.familyHomeThirdParty?.overview || null,
+
+        combinedAssetsOver3m: !!body.assetsOver3M?.answer,
+        combinedAssetsOver3mOverview: body.assetsOver3M?.overview || null,
+
+        childFromPreviousRelationshipsLivingWithYou: !!body.childLivingWithYou?.answer,
+        childFromPreviousOverview: body.childLivingWithYou?.overview || null,
+
+        additionalComplexities: body.additionalComplexities || {},
+      };
+
+      // optional DTO validation
+      if (DtoClass) {
+        const instance = plainToInstance(DtoClass, mapped);
+        const errors = await validate(instance as object, {
+          whitelist: true,
+          forbidNonWhitelisted: false,
+        });
+        if (errors.length > 0) {
+          throw new BadRequestException(errors);
+        }
+      }
+
+      validatedData = mapped;
     }
+
     // SPECIAL CASE: map UI payload for step 6 into schema fields
     else if (stepNumber === 6) {
       // frontend payload expected:
