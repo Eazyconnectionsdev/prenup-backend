@@ -1,10 +1,10 @@
+// src/auth/auth.service.ts
 import {
   Injectable,
   BadRequestException,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-
 import { JwtService } from '@nestjs/jwt';
 import crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +15,7 @@ import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from 'src/users/schemas/user.schema';
 import { UpdateUserDto } from './dto/update-user.dto';
+
 export interface SignedUser {
   token: string;
   expiresAt: number;
@@ -39,7 +40,10 @@ export class AuthService {
     @InjectModel(User.name) private userModel: Model<UserDocument>
   ) {}
 
-  async register(dto: any) {
+  //
+  // Registration (with OTP)
+  //
+  async registerAndSendOtp(dto: any) {
     const {
       email,
       password,
@@ -59,7 +63,10 @@ export class AuthService {
       );
     }
 
-    const existing = await this.usersService.findByEmail(email);
+    const normalizedEmail = email?.toLowerCase?.();
+    if (!normalizedEmail) throw new BadRequestException('Email required');
+
+    const existing = await this.usersService.findByEmail(normalizedEmail);
     if (existing) {
       throw new BadRequestException('Email already registered');
     }
@@ -67,7 +74,7 @@ export class AuthService {
     const passwordHash = await this.usersService.hashPassword(password);
 
     const user = await this.usersService.create({
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       passwordHash,
       firstName,
       middleName,
@@ -77,41 +84,88 @@ export class AuthService {
       phone: phone?.trim(),
       marketingConsent: !!marketingConsent,
       acceptedTerms: true,
-    });
+      emailVerified: false,
+    } as any);
 
-    const userCase = await this.casesService.create(user._id.toString());
+    // create a case for the user (your business logic might differ)
+    await this.casesService.create(user._id.toString());
 
-    const signed = this.signUser(user);
+    // generate and send OTP
+    const otpResult = await this.generateAndSendVerificationOtp(user);
 
     return {
-      token: signed.token,
-      expiresAt: signed.expiresAt,
-
-      user: {
-        _id: user._id?.toString ? user._id.toString() : user._id,
-        firstName: user?.firstName,
-        middleName: user?.middleName,
-        lastName: user?.lastName,
-        email: user.email,
-        phone: user?.phone,
-        fianceDetails: user?.fianceDetails || {},
-        suffix: user?.suffix,
-        dateOfBirth: user?.dateOfBirth ? user.dateOfBirth.toISOString() : null,
-        role: user.role,
-        endUserType: user.endUserType,
-        acceptedTerms: !!user?.acceptedTerms,
-        marketingConsent: !!user?.marketingConsent,
-      },
-
-      caseId:
-        userCase && (userCase._id || userCase.id)
-          ? userCase._id
-            ? userCase._id.toString()
-            : userCase.id.toString()
-          : null,
+      email: user.email,
+      expiresAt: otpResult.expiresAt,
     };
   }
 
+  // Generate numeric OTP, save to user, and send via mail service
+  async generateAndSendVerificationOtp(user: any) {
+    const otpLength = Number(this.config.get('OTP_LENGTH') || 6);
+    const otp = this.generateNumericOtp(otpLength);
+    const expires = new Date(
+      Date.now() + Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000,
+    );
+
+    // store OTP on user
+    await this.usersService.setEmailVerificationOtp(user._id.toString(), otp, expires);
+
+    // attempt to send OTP email (don't fail registration if emailing fails)
+    try {
+      await this.mailService.sendVerificationOtp(user.email, otp, { expiresAt: expires });
+    } catch (err) {
+      // log and continue; user can resend OTP
+      this.logger.error('Failed to send verification OTP', err as any);
+    }
+
+    return { otp, expiresAt: expires.getTime() };
+  }
+
+  // Verify OTP for registration - marks emailVerified and signs user
+  async verifyRegistrationOtp(email: string, otp: string): Promise<SignedUser> {
+    const normalizedEmail = email?.toLowerCase?.();
+    if (!normalizedEmail) throw new BadRequestException('Email required');
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
+    if (!user) throw new NotFoundException('User not found');
+
+    if (!user.emailVerificationOtp || user.emailVerificationOtp !== otp) {
+      throw new BadRequestException('Invalid OTP');
+    }
+    if (!user.emailVerificationOtpExpires || user.emailVerificationOtpExpires < new Date()) {
+      throw new BadRequestException('OTP expired');
+    }
+
+    // mark verified and clear OTP
+    await this.usersService.markEmailVerified(user._id.toString());
+    await this.usersService.clearEmailVerificationOtp(user._id.toString());
+
+    // Re-fetch user to ensure latest fields (optional)
+    const freshUser = await this.usersService.findById(user._id.toString());
+
+    // sign and return
+    return this.signUser(freshUser);
+  }
+
+  // Resend OTP (if user exists and not verified)
+  async resendRegistrationOtp(email: string) {
+    const normalizedEmail = email?.toLowerCase?.();
+    if (!normalizedEmail) return;
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
+    if (!user) return;
+
+    if (user.emailVerified) {
+      // already verified - nothing to do
+      return;
+    }
+
+    await this.generateAndSendVerificationOtp(user);
+  }
+
+  //
+  // Existing auth helpers
+  //
   signUser(user: any): SignedUser {
     const payload = { id: user._id.toString(), role: user.role };
     const token = this.jwtService.sign(payload);
@@ -136,10 +190,7 @@ export class AuthService {
   async validateUser(email: string, password: string) {
     const user = await this.usersService.findByEmail(email);
     if (!user) return null;
-    const ok = await this.usersService.comparePassword(
-      password,
-      user.passwordHash,
-    );
+    const ok = await this.usersService.comparePassword(password, user.passwordHash);
     if (!ok) return null;
     return user;
   }
@@ -152,8 +203,7 @@ export class AuthService {
     }
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(
-      Date.now() +
-        Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
+      Date.now() + Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
     );
     await this.usersService.setResetToken(user._id.toString(), token, expires);
     const resetUrl = `${this.config.get('APP_BASE_URL')}/auth/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
@@ -171,7 +221,9 @@ export class AuthService {
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
 
-  // inside AuthService (or the service that has acceptInvite)
+  //
+  // Invite acceptance (existing logic)
+  //
   async acceptInvite(
     caseId: string,
     token: string,
@@ -203,7 +255,8 @@ export class AuthService {
 
     // 4) hash
     const passwordHash = await this.usersService.hashPassword(userPassword);
-const acceptedTerms = true;
+    const acceptedTerms = true;
+
     // 5) create user with try/catch and debug logging
     let user;
     try {
@@ -215,10 +268,10 @@ const acceptedTerms = true;
         endUserType: 'user2',
         invitedBy: caseDoc.owner,
         inviteCaseId: caseDoc._id,
-        acceptedTerms : acceptedTerms
+        acceptedTerms: acceptedTerms,
+        emailVerified: true, // invited users considered verified by invite flow
       } as any);
     } catch (err) {
-      // log and rethrow with helpful message
       this.logger?.error?.('User creation failed in acceptInvite', err as any);
       throw new BadRequestException('Failed to create invited user');
     }
@@ -232,7 +285,6 @@ const acceptedTerms = true;
           : null;
 
     if (!createdId) {
-      // dump user for debugging (don't leave verbose logging in production if it contains sensitive data)
       this.logger?.error?.('Created user missing _id or id', { user });
       throw new BadRequestException('User creation did not return id');
     }
@@ -247,7 +299,7 @@ const acceptedTerms = true;
       createdAt: new Date(),
     });
 
-    // 9) Send email with credentials (catch errors but don't crash the whole flow if email fails)
+    // 9) Send email with credentials (catch errors but don't crash)
     try {
       await this.mailService.sendInviteCredentials(
         email,
@@ -255,17 +307,16 @@ const acceptedTerms = true;
         caseDoc._id.toString(),
       );
     } catch (err) {
-      // log the email failure but continue — inviter can still fetch stored creds
-      this.logger?.error?.(
-        'Failed to send invite credentials email',
-        err as any,
-      );
+      this.logger?.error?.('Failed to send invite credentials email', err as any);
     }
 
-    // 10) return signed user (token) or whatever signUser does
+    // 10) return signed user (token)
     return this.signUser(user);
   }
 
+  //
+  // Utilities
+  //
   generateRandomPassword(length = 12): string {
     const chars =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
@@ -307,4 +358,10 @@ const acceptedTerms = true;
   
       return user;
     }
+  private generateNumericOtp(length = 6): string {
+    const min = Math.pow(10, length - 1);
+    const max = Math.pow(10, length) - 1;
+    const n = Math.floor(Math.random() * (max - min + 1)) + min;
+    return n.toString();
+  }
 }

@@ -1,3 +1,4 @@
+// src/users/user.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
@@ -31,8 +32,7 @@ class FianceDetails {
   phone?: string | null;
 }
 
-const FianceDetailsSchema =
-  SchemaFactory.createForClass(FianceDetails);
+const FianceDetailsSchema = SchemaFactory.createForClass(FianceDetails);
 
 /* ===============================
    User Schema
@@ -95,9 +95,24 @@ export class User {
   @Prop({ type: Boolean, required: true })
   acceptedTerms: boolean;
 
-  // ✅ Embedded Fiancé Details (same collection)
+  // Embedded Fiancé Details (same collection)
   @Prop({ type: FianceDetailsSchema, default: null })
   fianceDetails?: FianceDetails | null;
+
+  // ---------- Email OTP verification ----------
+  @Prop({ type: Boolean, default: false })
+  emailVerified?: boolean;
+
+  @Prop({ type: String, default: null })
+  emailVerificationOtp?: string | null;
+
+  @Prop({ type: Date, default: null })
+  emailVerificationOtpExpires?: Date | null;
+
+  // ---------- NEW: payment lock flag ----------
+  // Set to true when the (single) required payment has been completed.
+  @Prop({ type: Boolean, default: false })
+  paymentDone?: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
