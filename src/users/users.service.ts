@@ -32,19 +32,36 @@ export class UsersService {
   }
 
   async setResetToken(userId: string, token: string, expires: Date) {
-    return this.userModel.findByIdAndUpdate(userId, { resetPasswordToken: token, resetPasswordExpires: expires }).exec();
+    return this.userModel
+      .findByIdAndUpdate(userId, {
+        resetPasswordToken: token,
+        resetPasswordExpires: expires,
+      })
+      .exec();
   }
 
   async clearResetToken(userId: string) {
-    return this.userModel.findByIdAndUpdate(userId, { resetPasswordToken: null, resetPasswordExpires: null }).exec();
+    return this.userModel
+      .findByIdAndUpdate(userId, {
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+      })
+      .exec();
   }
 
   async updatePassword(userId: string, passwordHash: string) {
-    return this.userModel.findByIdAndUpdate(userId, { passwordHash, resetPasswordToken: null, resetPasswordExpires: null }).exec();
+    return this.userModel
+      .findByIdAndUpdate(userId, {
+        passwordHash,
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+      })
+      .exec();
   }
-  
+
   generateRandomPassword(length = 12): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+    const chars =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
     let result = '';
     for (let i = 0; i < length; i++) {
       result += chars.charAt(Math.floor(Math.random() * chars.length));

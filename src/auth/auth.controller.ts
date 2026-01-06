@@ -1,5 +1,5 @@
 // auth.controller.ts
-import { Body, Controller, ForbiddenException, Get, HttpCode, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, HttpCode, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -8,6 +8,9 @@ import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { CasesService } from '../cases/cases.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
+import { UpdateUserDto } from './dto/update-user.dto';
+
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -178,5 +181,12 @@ export class AuthController {
   @Get('me')
   me(@Req() req) {
     return req.user; // make sure sensitive fields are filtered out upstream
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put('update-details')
+  async updateDetails(@Req() req, @Body() dto: UpdateUserDto) {
+    const user = await this.authService.updateUserProfile(req.user.id, dto);
+    return user;
   }
 }

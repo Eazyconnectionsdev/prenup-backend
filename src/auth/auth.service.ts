@@ -11,7 +11,10 @@ import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { CasesService } from '../cases/cases.service';
-import { Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
+import { InjectModel } from '@nestjs/mongoose';
+import { User, UserDocument } from 'src/users/schemas/user.schema';
+import { UpdateUserDto } from './dto/update-user.dto';
 export interface SignedUser {
   token: string;
   expiresAt: number;
@@ -33,6 +36,7 @@ export class AuthService {
     private mailService: MailService,
     private config: ConfigService,
     private casesService: CasesService,
+    @InjectModel(User.name) private userModel: Model<UserDocument>
   ) {}
 
   async register(dto: any) {
@@ -271,4 +275,36 @@ const acceptedTerms = true;
     }
     return result;
   }
+
+
+  async updateUserProfile(id: string, updateDto: UpdateUserDto): Promise<User> {
+      const user = await this.userModel.findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            firstName: updateDto.firstName,
+            middleName: updateDto.middleName,
+            lastName: updateDto.lastName,
+            suffix: updateDto.suffix,
+            email: updateDto.email,
+            dateOfBirth: updateDto.dateOfBirth,
+            fianceDetails: {
+              firstName: updateDto.fianceFirstName,
+              middleName: updateDto.fianceMiddleName,
+              lastName: updateDto.fianceLastName,
+              suffix: updateDto.fianceSuffix,
+              dateOfBirth: updateDto.fianceDateOfBirth,
+              email: updateDto.fianceEmail,
+            },
+          },
+        },
+        { new: true, runValidators: true },
+      );
+  
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+  
+      return user;
+    }
 }

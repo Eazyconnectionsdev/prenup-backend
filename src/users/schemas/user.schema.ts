@@ -24,7 +24,7 @@ class FianceDetails {
   @Prop({ type: Date, default: null })
   dateOfBirth?: Date | null;
 
-  @Prop({ type: String, default: null })
+  @Prop({ type: String, default: null }) 
   email?: string | null;
 
   @Prop({ type: String, default: null })

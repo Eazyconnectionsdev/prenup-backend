@@ -8,6 +8,8 @@ import { AuthController } from './auth.controller';
 import { MailModule } from '../mail/mail.module';
 import { CasesModule } from '../cases/cases.module';
 import { JwtStrategy } from '../common/jwt.strategy';
+import { MongooseModule } from '@nestjs/mongoose';
+import { User, UserSchema } from 'src/users/schemas/user.schema';
 
 @Module({
   imports: [
@@ -24,6 +26,7 @@ import { JwtStrategy } from '../common/jwt.strategy';
         signOptions: { expiresIn: cs.get('JWT_EXPIRES_IN') || '7d' },
       }),
     }),
+    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }])
   ],
   providers: [AuthService, JwtStrategy],
   controllers: [AuthController],
