@@ -115,10 +115,7 @@ export class CasesController {
     const user = this.ensureUser(req);
     return this.casesService.attachInvitedUser(id, user.id);
   }
-
-  /**
-   * Fetch a single step's data and status for a case
-   */
+  // inside your controller file (replace existing getStep)
   @UseGuards(JwtAuthGuard)
   @Get(':id/steps/:stepNumber')
   async getStep(@Req() req, @Param('id') id: string, @Param('stepNumber') stepNumberStr: string) {
@@ -142,13 +139,151 @@ export class CasesController {
     }
 
     const key = `step${stepNumber}`;
-    const stepData = (c as any)[key] ?? {};
-    const stepStatus = (c.status && (c.status as any)[key]) || {};
+
+    // helper: returns a fully-shaped template for each step
+    const getEmptyStepTemplate = (n: number) => {
+      switch (n) {
+        case 1:
+        case 3: // step3 mirrors step1
+          return {
+            firstName: null,
+            middleNames: null,
+            lastName: null,
+            dateOfBirth: null,
+            address: null,
+            dateOfMarriage: null,
+            hasChildren: false,
+            fluentInEnglish: false,
+            nationality: null,
+            domicileResidencyStatus: null,
+            occupation: null,
+            incomeGBP: null,
+            overviewAim: null,
+            currentLivingSituation: null,
+            confirm_wenup_platform_used: false,
+            property_personal_possessions_remain: false,
+            family_home_divided_equally: false,
+            court_can_depart_for_children: false,
+            agree_costs_shared: false,
+          };
+        case 2:
+        case 4: // step4 mirrors step2
+          return {
+            separateEarnings: false,
+            earningsEntries: [],
+            separateProperties: false,
+            propertyEntries: [],
+            separateSavings: false,
+            savingsEntries: [],
+            separatePensions: false,
+            pensionEntries: [],
+            separateDebts: false,
+            debtEntries: [],
+            separateBusinesses: false,
+            businessEntries: [],
+            separateChattels: false,
+            chattelEntries: [],
+            separateOtherAssets: false,
+            otherAssetEntries: [],
+          };
+        case 5:
+          return {
+            sharedEarnings: false,
+            sharedEarningsDetails: {},
+            sharedDebts: false,
+            sharedDebtsDetails: {},
+            sharedBusinesses: false,
+            sharedBusinessesDetails: {},
+            sharedChattels: false,
+            sharedChattelsDetails: {},
+            sharedOtherAssets: false,
+            sharedOtherAssetsDetails: {},
+            liveInRentedOrOwned: false,
+            sharedSavings: false,
+            sharedPensions: false,
+          };
+        case 6:
+          return {
+            inheritanceConsideredSeparate: false,
+            giftConsideredSeparate: false,
+            futureAssetsTreatedJointOrSeparate: false,
+            willBeSameAsDivorceSplit: false,
+            wantWillHelp: false,
+            person1FutureInheritance: {
+              originalAmount: null,
+              originalCurrency: null,
+              gbpEquivalent: null,
+              basisOfEstimate: null,
+            },
+            person2FutureInheritance: {
+              originalAmount: null,
+              originalCurrency: null,
+              gbpEquivalent: null,
+              basisOfEstimate: null,
+            },
+          };
+        case 7:
+          return {
+            isOnePregnant: false,
+            isOnePregnantOverview: null,
+            businessWorkedTogether: false,
+            businessWorkedTogetherOverview: null,
+            oneOutOfWorkOrDependent: false,
+            oneOutOfWorkOverview: null,
+            familyHomeOwnedWith3rdParty: false,
+            familyHome3rdPartyOverview: null,
+            combinedAssetsOver3m: false,
+            combinedAssetsOver3mOverview: null,
+            childFromPreviousRelationshipsLivingWithYou: false,
+            childFromPreviousOverview: null,
+            additionalComplexities: {},
+          };
+        default:
+          return {};
+      }
+    };
+
+    // helper: normalized default status
+    const defaultStepStatus = () => ({
+      submitted: false,
+      submittedBy: null,
+      submittedAt: null,
+      locked: false,
+      lockedBy: null,
+      lockedAt: null,
+      unlockedBy: null,
+      unlockedAt: null,
+    });
+
+    // stored data (may be partial)
+    const storedStepData = (c as any)[key] ?? {};
+    const template = getEmptyStepTemplate(stepNumber);
+
+    // Merge stored values into the template (shallow merge; nested arrays/objects are replaced by stored value)
+    const mergedData = { ...template, ...storedStepData };
+
+    // pick status (if stored) or default
+    const rawStatus = (c.status && (c.status as any)[key]) || {};
+    const stepStatus = {
+      submitted: !!rawStatus.submitted,
+      submittedBy: rawStatus.submittedBy ? rawStatus.submittedBy.toString() : null,
+      submittedAt: rawStatus.submittedAt ? rawStatus.submittedAt : null,
+      locked: !!rawStatus.locked,
+      lockedBy: rawStatus.lockedBy ? rawStatus.lockedBy.toString() : null,
+      lockedAt: rawStatus.lockedAt ? rawStatus.lockedAt : null,
+      unlockedBy: rawStatus.unlockedBy ? rawStatus.unlockedBy.toString() : null,
+      unlockedAt: rawStatus.unlockedAt ? rawStatus.unlockedAt : null,
+    };
+
+    // if there was no rawStatus, give the default shape
+    const finalStatus = Object.keys(stepStatus).every(k => stepStatus[k as keyof typeof stepStatus] === null || stepStatus[k as keyof typeof stepStatus] === false)
+      ? defaultStepStatus()
+      : stepStatus;
 
     return {
       stepNumber,
-      data: stepData,
-      status: stepStatus,
+      data: mergedData,
+      status: finalStatus,
       fullyLocked: !!c.fullyLocked,
     };
   }
