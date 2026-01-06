@@ -1,133 +1,71 @@
 // src/cases/dto/step5.dto.ts
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  ArrayMinSize,
+  ArrayMaxSize,
+  IsIn,
+  IsOptional,
+  IsString,
+  ValidateNested,
+  IsBoolean,
+  IsObject,
+  IsISO8601,
+} from 'class-validator';
 
-// Shared Earnings
-class SharedIncomeEntryDto {
-  @IsString() source: string;
-  @IsNumber() amount: number;
-  @IsOptional() @IsString() notes?: string;
+export class QuestionDto {
+  @IsString()
+  question!: string;
+
+  // answer is optional (may be missing/null while drafting). When present, must be 'yes' or 'no'.
+  @IsOptional()
+  @IsIn(['yes', 'no'], { message: 'answer must be "yes" or "no"' })
+  answer?: 'yes' | 'no';
 }
 
-// Shared Debts
-class SharedDebtEntryDto {
-  @IsString() accountOrLender: string;
-  @IsString() description: string;
-  @IsNumber() amount: number;
-  @IsOptional() @IsString() notes?: string;
-}
+export class FollowUpDto {
+  @IsString()
+  question!: string;
 
-// Shared Businesses
-class SharedBusinessEntryDto {
-  @IsString() name: string;
-  @IsOptional() @IsString() description?: string;
-  @IsNumber() value: number;
-  @IsOptional() @IsNumber() ownershipPercentage?: number;
-  @IsOptional() @IsString() explanation?: string;
-}
+  @IsOptional()
+  @IsIn(['yes', 'no'], { message: 'answer must be "yes" or "no"' })
+  answer?: 'yes' | 'no';
 
-// Shared Chattels
-class SharedChattelEntryDto {
-  @IsString() description: string;
-  @IsNumber() value: number;
-  @IsOptional() @IsString() registrationOrId?: string;
-  @IsOptional() @IsString() notes?: string;
-}
-
-// Other Shared Assets
-class SharedOtherAssetEntryDto {
-  @IsOptional() @IsString() provider?: string;
-  @IsString() description: string;
-  @IsNumber() value: number;
-  @IsOptional() @IsString() notes?: string;
-}
-
-// Shared Savings
-class SharedSavingEntryDto {
-  @IsString() name: string;
-  @IsNumber() amount: number;
-  @IsOptional() @IsString() notes?: string;
-}
-
-// Shared Pensions
-class SharedPensionEntryDto {
-  @IsString() name: string;
-  @IsNumber() value: number;
-  @IsOptional() @IsString() notes?: string;
-}
-
-// Property currently lived in
-class PropertyDto {
-  @IsString() addressLine1: string;
-  @IsOptional() @IsString() addressLine2?: string;
-  @IsOptional() @IsString() townOrCity?: string;
-  @IsOptional() @IsString() postcode?: string;
-  @IsOptional() @IsNumber() value?: number;
-  @IsOptional() @IsString() mortgageOutstanding?: string;
-  @IsOptional() @IsString() notes?: string;
+  // details may be any JSON object (optional)
+  @IsOptional()
+  @IsObject({ message: 'details must be an object' })
+  details?: Record<string, any>;
 }
 
 export class Step5Dto {
-  // 1. Shared Earnings
-  @IsBoolean() hasSharedEarnings: boolean;
+  @IsOptional()
+  @IsString()
+  heading?: string;
+
+  // questions array: must be exactly 4 items (matches frontend)
+  @IsArray()
+  @ArrayMinSize(4, { message: 'questions must have 4 items' })
+  @ArrayMaxSize(4, { message: 'questions must have 4 items' })
+  @ValidateNested({ each: true })
+  @Type(() => QuestionDto)
+  questions!: QuestionDto[];
+
+  // followUpsShown is optional but when present should be boolean
+  @IsOptional()
+  @IsBoolean({ message: 'followUpsShown must be a boolean' })
+  followUpsShown?: boolean;
+
+  // followUps array: must be exactly 4 items (frontend renders 4 follow-ups)
   @IsOptional()
   @IsArray()
+  @ArrayMinSize(4, { message: 'followUps must have 4 items' })
+  @ArrayMaxSize(4, { message: 'followUps must have 4 items' })
   @ValidateNested({ each: true })
-  @Type(() => SharedIncomeEntryDto)
-  sharedEarningsEntries?: SharedIncomeEntryDto[];
+  @Type(() => FollowUpDto)
+  followUps?: FollowUpDto[];
 
-  // 1b. Shared Debts
-  @IsBoolean() hasSharedDebts: boolean;
+  // savedAt optional ISO8601 timestamp
   @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SharedDebtEntryDto)
-  sharedDebtEntries?: SharedDebtEntryDto[];
-
-  // 1c. Shared Businesses
-  @IsBoolean() hasSharedBusinesses: boolean;
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SharedBusinessEntryDto)
-  sharedBusinessEntries?: SharedBusinessEntryDto[];
-
-  // 1d. Shared Chattels
-  @IsBoolean() hasSharedChattels: boolean;
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SharedChattelEntryDto)
-  sharedChattelEntries?: SharedChattelEntryDto[];
-
-  // 1e. Other Shared Assets
-  @IsBoolean() hasOtherSharedAssets: boolean;
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SharedOtherAssetEntryDto)
-  sharedOtherAssetEntries?: SharedOtherAssetEntryDto[];
-
-  // 2. Property currently lived in
-  @IsBoolean() hasProperty: boolean;
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => PropertyDto)
-  property?: PropertyDto;
-
-  // 3. Shared Savings
-  @IsBoolean() hasSharedSavings: boolean;
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SharedSavingEntryDto)
-  sharedSavingsEntries?: SharedSavingEntryDto[];
-
-  // 4. Shared Pensions
-  @IsBoolean() hasSharedPensions: boolean;
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => SharedPensionEntryDto)
-  sharedPensionEntries?: SharedPensionEntryDto[];
+  @IsISO8601({ strict: true }, { message: 'savedAt must be an ISO8601 datetime string' })
+  savedAt?: string;
 }

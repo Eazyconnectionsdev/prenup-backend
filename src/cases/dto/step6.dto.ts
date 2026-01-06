@@ -1,41 +1,68 @@
 // src/cases/dto/step6.dto.ts
-import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { Type, Transform } from 'class-transformer';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 
-// DTO for future inheritance/gift/debt entries
-class FutureAssetEntryDto {
-  @IsNumber() originalAmount: number;
-  @IsString() originalCurrency: string;
-  @IsNumber() gbpEquivalent: number;
-  @IsString() basisOfEstimate: string;
+export class FutureInheritanceDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'originalAmount must be a number' })
+  originalAmount?: number | null;
+
+  @IsOptional()
+  @IsString()
+  originalCurrency?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'gbpEquivalent must be a number' })
+  gbpEquivalent?: number | null;
+
+  @IsOptional()
+  @IsString()
+  basisOfEstimate?: string | null;
 }
 
-// Step 6 DTO
 export class Step6Dto {
-  // 1. Inheritance: Separate or Joint
-  @IsBoolean() inheritanceSeparate: boolean;
+  // Coerce incoming values to boolean using Type(() => Boolean).
+  // This handles true/false booleans and "true"/"false" string values.
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean({ message: 'inheritanceSeparate must be a boolean value' })
+  inheritanceSeparate?: boolean;
 
-  // 2. Gifts: Separate or Joint
-  @IsBoolean() giftsSeparate: boolean;
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean({ message: 'giftsSeparate must be a boolean value' })
+  giftsSeparate?: boolean;
 
-  // 3. Future assets or debts acquired in sole names: Separate or Joint
-  @IsBoolean() futureSoleAssetsSeparate: boolean;
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean({ message: 'futureSoleAssetsSeparate must be a boolean value' })
+  futureSoleAssetsSeparate?: boolean;
 
-  // 4. Agreement for divorce vs. death
-  @IsBoolean() sameAsWill: boolean;
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean({ message: 'sameAsWill must be a boolean value' })
+  sameAsWill?: boolean;
 
-  // 5. Will assistance
-  @IsBoolean() wantWillAssistance: boolean;
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean({ message: 'wantWillAssistance must be a boolean value' })
+  wantWillAssistance?: boolean;
 
-  // 6. Future inheritance details for Person 1
   @IsOptional()
   @ValidateNested()
-  @Type(() => FutureAssetEntryDto)
-  sooriyaFutureInheritance?: FutureAssetEntryDto;
+  @Type(() => FutureInheritanceDto)
+  sooriyaFutureInheritance?: FutureInheritanceDto | null;
 
-  // 7. Future inheritance details for Person 2
   @IsOptional()
   @ValidateNested()
-  @Type(() => FutureAssetEntryDto)
-  gomathiFutureInheritance?: FutureAssetEntryDto;
+  @Type(() => FutureInheritanceDto)
+  gomathiFutureInheritance?: FutureInheritanceDto | null;
 }

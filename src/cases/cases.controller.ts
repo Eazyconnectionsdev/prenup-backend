@@ -1,4 +1,4 @@
-// file: src/cases/cases.controller.ts
+// src/cases/cases.controller.ts
 import {
   Body,
   Controller,
@@ -26,14 +26,11 @@ import { Step6Dto } from './dto/step6.dto';
 import { Step7Dto } from './dto/step7.dto';
 import { LawyersService } from './lawyer.service';
 
-/**
- * Which steps end-user types can submit
- */
 const END_USER1_STEPS = [1, 2, 5, 6, 7];
 const END_USER2_STEPS = [3, 4];
 
 /**
- * Step 5 UI text (mirrors frontend)
+ * Step 5 UI text (mirrors frontend JointAssetsPage)
  */
 const STEP5_HEADING = "Joint assets";
 const STEP5_QUESTIONS = [
@@ -49,9 +46,20 @@ const STEP5_FOLLOW_UPS = [
   `Do you have any other shared assets or any other assets you'd like to share in the event of a divorce or separation?`,
 ];
 
+/**
+ * Step 6 UI text (mirrors frontend FutureAssetsPage)
+ */
+const STEP6_HEADING = "Future Assets";
+const STEP6_QUESTIONS = [
+  `If one of you inherits something, will the inheritance be considered the separate asset (Separate) for the person who inherits it, or a joint asset (Joint) shared between both of you?`,
+  `If one of you is gifted something, will the gift be considered a separate asset (Separate) for whichever of you receives it, or a joint asset (Joint) shared between both of you?`,
+  `Do you want any future assets or debts acquired in either of your sole names to be treated as Joint or Separate?`,
+  `This agreement governs what happens in the event of divorce not death, however it is advisable that you make a new Will once you are married. Do you expect what you leave each other in the event of one of your deaths to be the same as the way your assets will be split in the event of a divorce?`,
+];
+
 @Controller('cases')
 export class CasesController {
-  constructor(private casesService: CasesService, private lawyersService: LawyersService) { }
+  constructor(private casesService: CasesService, private lawyersService: LawyersService) {}
 
   private ensureUser(req: any) {
     const user = req.user;
@@ -138,8 +146,7 @@ export class CasesController {
   }
 
   /**
-   * Get a single step. Special-case step 5 to return the UI-shaped payload
-   * that the frontend JointAssetsPage expects.
+   * Get a single step. Special-case step 5 and 6 to return UI-shaped payloads.
    */
   @UseGuards(JwtAuthGuard)
   @Get(':id/steps/:stepNumber')
@@ -164,8 +171,6 @@ export class CasesController {
     }
 
     const key = `step${stepNumber}`;
-
-    // convert to plain object and pick only the requested step & status
     const doc = (c as any).toObject ? (c as any).toObject() : c;
     const storedStepData = doc[key] ?? {};
     const rawStatus = (doc.status && doc.status[key]) || {};
@@ -200,8 +205,11 @@ export class CasesController {
           };
         case 6:
           return {
-            inheritanceConsideredSeparate: false, giftConsideredSeparate: false,
-            futureAssetsTreatedJointOrSeparate: false, willBeSameAsDivorceSplit: false, wantWillHelp: false,
+            inheritanceConsideredSeparate: false,
+            giftConsideredSeparate: false,
+            futureAssetsTreatedJointOrSeparate: false,
+            willBeSameAsDivorceSplit: false,
+            wantWillHelp: false,
             person1FutureInheritance: { originalAmount: null, originalCurrency: null, gbpEquivalent: null, basisOfEstimate: null },
             person2FutureInheritance: { originalAmount: null, originalCurrency: null, gbpEquivalent: null, basisOfEstimate: null },
           };
@@ -237,7 +245,6 @@ export class CasesController {
       unlockedBy: null, unlockedAt: null,
     };
 
-    // if all fields are empty/false, return defaultStatus to keep shape consistent
     const finalStatus = Object.values(statusNormalized).some(v => v !== null && v !== false) ? statusNormalized : defaultStatus;
 
     // SPECIAL CASE: step 5 -> return UI-shaped payload that JointAssetsPage expects
@@ -271,9 +278,51 @@ export class CasesController {
           questions: uiQuestions,
           followUpsShown: !!mergedData.sharedEarnings,
           followUps: uiFollowUps,
-          // savedAt: use any saved timestamp in the stored details if present; fallback to case updatedAt
           savedAt: (mergedData.sharedEarningsDetails && mergedData.sharedEarningsDetails.ui && mergedData.sharedEarningsDetails.ui.savedAt) || doc.updatedAt || null,
         },
+        status: finalStatus,
+        fullyLocked: !!doc.fullyLocked,
+      };
+    }
+
+    // SPECIAL CASE: step 6 -> return UI-shaped payload that FutureAssetsPage expects
+    if (stepNumber === 6) {
+      const uiQuestions = STEP6_QUESTIONS.map((q, idx) => ({
+        question: q,
+        answer:
+          idx === 0 ? (mergedData.inheritanceConsideredSeparate ? 'yes' : 'no')
+          : idx === 1 ? (mergedData.giftConsideredSeparate ? 'yes' : 'no')
+          : idx === 2 ? (mergedData.futureAssetsTreatedJointOrSeparate ? 'yes' : 'no')
+          : idx === 3 ? (mergedData.willBeSameAsDivorceSplit ? 'yes' : 'no')
+          : null,
+      }));
+
+      const uiPayload = {
+        heading: STEP6_HEADING,
+        questions: uiQuestions,
+        inheritanceSeparate: !!mergedData.inheritanceConsideredSeparate,
+        giftsSeparate: !!mergedData.giftConsideredSeparate,
+        futureSoleAssetsSeparate: !!mergedData.futureAssetsTreatedJointOrSeparate,
+        sameAsWill: !!mergedData.willBeSameAsDivorceSplit,
+        wantWillAssistance: !!mergedData.wantWillHelp,
+        sooriyaFutureInheritance: {
+          originalAmount: mergedData.person1FutureInheritance?.originalAmount ?? null,
+          originalCurrency: mergedData.person1FutureInheritance?.originalCurrency ?? null,
+          gbpEquivalent: mergedData.person1FutureInheritance?.gbpEquivalent ?? null,
+          basisOfEstimate: mergedData.person1FutureInheritance?.basisOfEstimate ?? null,
+        },
+        gomathiFutureInheritance: {
+          originalAmount: mergedData.person2FutureInheritance?.originalAmount ?? null,
+          originalCurrency: mergedData.person2FutureInheritance?.originalCurrency ?? null,
+          gbpEquivalent: mergedData.person2FutureInheritance?.gbpEquivalent ?? null,
+          basisOfEstimate: mergedData.person2FutureInheritance?.basisOfEstimate ?? null,
+        },
+        savedAt: (mergedData.person1FutureInheritance && (mergedData.person1FutureInheritance as any).savedAt) || doc.updatedAt || null,
+      };
+
+      return {
+        stepNumber,
+        data: uiPayload,
         status: finalStatus,
         fullyLocked: !!doc.fullyLocked,
       };
@@ -289,8 +338,10 @@ export class CasesController {
   }
 
   /**
-   * Update a specific step of a case.
-   * For step 5 accepts the UI payload shape and maps into DB fields.
+   * Update a specific step of a case
+   * - Non-privileged end-users: must follow end-user step rules (which step types they can submit).
+   * - Privileged roles: may update any step.
+   * - New locking: only step 7 submission triggers a complete lock; otherwise end-users may re-submit/update 1-6.
    */
   @UseGuards(JwtAuthGuard)
   @Post(':id/steps/:stepNumber')
@@ -338,19 +389,15 @@ export class CasesController {
 
     // SPECIAL CASE: map UI payload for step 5 into schema fields
     if (stepNumber === 5) {
-      // Expecting UI payload with:
-      // { heading, questions: [{ question, answer }], followUpsShown, followUps: [{ question, answer, details? }], savedAt }
       const questions = Array.isArray(body.questions) ? body.questions : [];
       const followUps = Array.isArray(body.followUps) ? body.followUps : [];
 
       const step5Payload = {
-        // main booleans
         sharedEarnings: (questions[0]?.answer === 'yes'),
         liveInRentedOrOwned: (questions[1]?.answer === 'yes'),
         sharedSavings: (questions[2]?.answer === 'yes'),
         sharedPensions: (questions[3]?.answer === 'yes'),
 
-        // follow-ups: booleans + store details objects (so frontend can read them back)
         sharedDebts: (followUps[0]?.answer === 'yes'),
         sharedDebtsDetails: followUps[0]?.details || {},
 
@@ -376,17 +423,68 @@ export class CasesController {
       };
 
       validatedData = step5Payload;
+    }
+    // SPECIAL CASE: map UI payload for step 6 into schema fields
+    else if (stepNumber === 6) {
+      // frontend payload expected:
+      // {
+      //   inheritanceSeparate: boolean,
+      //   giftsSeparate: boolean,
+      //   futureSoleAssetsSeparate: boolean,
+      //   sameAsWill: boolean,
+      //   wantWillAssistance: boolean,
+      //   sooriyaFutureInheritance: {...},
+      //   gomathiFutureInheritance: {...}
+      // }
+      const mapped = {
+        inheritanceConsideredSeparate: !!body.inheritanceSeparate,
+        giftConsideredSeparate: !!body.giftsSeparate,
+        futureAssetsTreatedJointOrSeparate: !!body.futureSoleAssetsSeparate,
+        willBeSameAsDivorceSplit: !!body.sameAsWill,
+        wantWillHelp: !!body.wantWillAssistance,
+
+        person1FutureInheritance: {
+          originalAmount: (body.sooriyaFutureInheritance && body.sooriyaFutureInheritance.originalAmount !== undefined) ? body.sooriyaFutureInheritance.originalAmount : null,
+          originalCurrency: body.sooriyaFutureInheritance?.originalCurrency ?? null,
+          gbpEquivalent: (body.sooriyaFutureInheritance && body.sooriyaFutureInheritance.gbpEquivalent !== undefined) ? body.sooriyaFutureInheritance.gbpEquivalent : null,
+          basisOfEstimate: body.sooriyaFutureInheritance?.basisOfEstimate ?? null,
+        },
+
+        person2FutureInheritance: {
+          originalAmount: (body.gomathiFutureInheritance && body.gomathiFutureInheritance.originalAmount !== undefined) ? body.gomathiFutureInheritance.originalAmount : null,
+          originalCurrency: body.gomathiFutureInheritance?.originalCurrency ?? null,
+          gbpEquivalent: (body.gomathiFutureInheritance && body.gomathiFutureInheritance.gbpEquivalent !== undefined) ? body.gomathiFutureInheritance.gbpEquivalent : null,
+          basisOfEstimate: body.gomathiFutureInheritance?.basisOfEstimate ?? null,
+        },
+
+        // Optionally keep UI payload for round-trip hydration
+        person1FutureInheritanceDetails: {
+          ui: {
+            heading: body.heading || STEP6_HEADING,
+            answers: body.questions || [],
+            savedAt: body.savedAt || new Date().toISOString(),
+          }
+        }
+      };
+
+      // Validate mapped payload if DTO exists
+      if (DtoClass) {
+        const instance = plainToInstance(DtoClass, mapped);
+        const errors = await validate(instance as object, { whitelist: true, forbidNonWhitelisted: false });
+        if (errors.length > 0) {
+          const formatted = errors.map(err => ({ property: err.property, constraints: err.constraints, children: err.children }));
+          throw new BadRequestException({ message: 'Validation failed', errors: formatted });
+        }
+      }
+
+      validatedData = mapped;
     } else {
-      // for other steps run DTO validation if DTO exists
+      // Default behavior: run DTO validation for other steps if DTO exists
       if (DtoClass) {
         const instance = plainToInstance(DtoClass, body);
         const errors = await validate(instance as object, { whitelist: true, forbidNonWhitelisted: false });
         if (errors.length > 0) {
-          const formatted = errors.map(err => ({
-            property: err.property,
-            constraints: err.constraints,
-            children: err.children,
-          }));
+          const formatted = errors.map(err => ({ property: err.property, constraints: err.constraints, children: err.children }));
           throw new BadRequestException({ message: 'Validation failed', errors: formatted });
         }
         validatedData = instance;
@@ -409,7 +507,6 @@ export class CasesController {
     return this.casesService.unlockCase(id, user.id);
   }
 
-  // lawyers listing - only allowed after fully locked + all steps submitted for non-privileged
   @UseGuards(JwtAuthGuard)
   @Get(':id/lawyers')
   async getLawyersForCase(@Req() req, @Param('id') id: string) {
@@ -485,8 +582,6 @@ export class CasesController {
   @UseGuards(JwtAuthGuard)
   @Post('seed')
   async seedLawyers(@Req() req) {
-    const user = req.user;
-
     return this.lawyersService.seedInitialLawyersIfEmpty();
   }
 
