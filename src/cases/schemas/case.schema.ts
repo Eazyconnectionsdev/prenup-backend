@@ -1,3 +1,4 @@
+// file: src/cases/schemas/case.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
@@ -150,6 +151,9 @@ export const Step4DetailsSchema = SchemaFactory.createForClass(Step4Details);
 
 /**
  * Step 5 - Joint Assets
+ *
+ * NOTE: the "Details" fields are generic Objects so we can persist UI payload
+ * (for round-trip / rehydration) and/or store structured info where needed.
  */
 @Schema({ _id: false })
 export class Step5Details {
@@ -227,7 +231,7 @@ export class Step7Details {
 export const Step7DetailsSchema = SchemaFactory.createForClass(Step7Details);
 
 /**
- * Step status subdocument (now includes lock metadata)
+ * Step status subdocument (includes lock metadata)
  */
 @Schema({ _id: false })
 export class StepStatus {
@@ -251,13 +255,14 @@ export class StepStatus {
 }
 export const StepStatusSchema = SchemaFactory.createForClass(StepStatus);
 
+/**
+ * Pre-questionnaire (per-user)
+ */
 @Schema({ _id: false })
 export class PreQuestionnaire {
-  // answers stored as strings (can be 'yes'/'no' or longer text). Frontend controls content/length.
   @Prop({ type: [String], default: [] })
   answers: string[];
 
-  // Lawyer selected by this user (ref to Lawyer)
   @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null })
   selectedLawyer: Types.ObjectId | null;
 
@@ -270,8 +275,7 @@ export class PreQuestionnaire {
   @Prop({ type: Date, default: null })
   submittedAt: Date | null;
 
-  // Lock to prevent plain end-user re-submission
-  // NOTE: Under the new rules, these remain fields but are only set when the whole case becomes locked.
+  // Lock to prevent plain end-user re-submission (set when whole case is locked)
   @Prop({ type: Boolean, default: false })
   locked: boolean;
 
@@ -337,7 +341,7 @@ export class Case {
   @Prop({ type: Step7DetailsSchema, default: {} })
   step7: Step7Details;
 
-  // in case.schema.ts
+  // pre-questionnaire per user
   @Prop({ type: PreQuestionnaireSchema, default: {} })
   preQuestionnaireUser1: PreQuestionnaire;
 
@@ -368,7 +372,7 @@ export class Case {
   };
 
   /**
-   * FULL CASE LOCK (new)
+   * FULL CASE LOCK
    * When step7 is submitted we set fullyLocked = true and populate who locked it and when.
    */
   @Prop({ type: Boolean, default: false })
