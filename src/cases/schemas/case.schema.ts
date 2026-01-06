@@ -1,4 +1,4 @@
-// file: src/cases/schemas/case.schema.ts
+// src/cases/schemas/case.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
