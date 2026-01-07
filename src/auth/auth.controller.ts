@@ -1,7 +1,21 @@
+// src/auth/auth.controller.ts
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+  BadRequestException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 
-import { Body, Controller, ForbiddenException, Get, HttpCode, NotFoundException, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
-
-import type { Response } from 'express';
+import type { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -35,14 +49,17 @@ export class AuthController {
   }
 
   @Post('login')
+  @HttpCode(200)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const user = await this.authService.validateUser(dto.email, dto.password);
     if (!user) {
-      return { error: 'Invalid credentials' };
+      // return proper 401 Unauthorized status
+      throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.emailVerified) {
-      return { error: 'Email not verified. Please verify via OTP sent to your email.' };
+      // Unverified email — also 401 (you can change to 403 if you prefer)
+      throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
 
     const userCase = await this.casesService.findByUserId(user._id);
@@ -77,7 +94,7 @@ export class AuthController {
         endUserType: user.endUserType,
         acceptedTerms: !!user?.acceptedTerms,
         marketingConsent: !!user?.marketingConsent,
-        // <-- new payment lock flag
+        // <-- payment lock flag
         paymentDone: !!(user as any)?.paymentDone,
       },
       caseId:
@@ -90,6 +107,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @HttpCode(200)
   async logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie('access_token', {
       httpOnly: true,
@@ -102,18 +120,21 @@ export class AuthController {
   }
 
   @Post('request-reset')
+  @HttpCode(200)
   async requestReset(@Body() dto: RequestResetDto) {
     await this.authService.requestPasswordReset(dto.email);
     return { message: 'If that email exists, a reset link has been sent' };
   }
 
   @Post('reset-password')
+  @HttpCode(200)
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.email, dto.token, dto.newPassword);
     return { message: 'Password reset successful' };
   }
 
   @Get('accept-invite')
+  @HttpCode(200)
   async acceptInvite(
     @Query('token') token: string,
     @Query('caseId') caseId: string,
@@ -153,6 +174,7 @@ export class AuthController {
   }
 
   @Post('verify-otp')
+  @HttpCode(200)
   async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
     const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
 
@@ -196,7 +218,7 @@ export class AuthController {
         endUserType: userDoc.endUserType,
         acceptedTerms: !!userDoc?.acceptedTerms,
         marketingConsent: !!userDoc?.marketingConsent,
-        // <-- new payment lock flag
+        // <-- payment lock flag
         paymentDone: !!(userDoc as any)?.paymentDone,
       },
       caseId:
@@ -209,6 +231,7 @@ export class AuthController {
   }
 
   @Post('resend-otp')
+  @HttpCode(200)
   async resendOtp(@Body() dto: ResendOtpDto) {
     await this.authService.resendRegistrationOtp(dto.email);
     return { message: 'If that email exists and is unverified, a new OTP was sent.' };
@@ -216,7 +239,9 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@Req() req) {
+  @HttpCode(200)
+  me(@Req() req: Request & { user?: any }) {
+    // JwtAuthGuard will attach the user; return it directly
     return req.user;
   }
 
