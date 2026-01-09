@@ -16,17 +16,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from 'src/users/schemas/user.schema';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-export interface SignedUser {
-  token: string;
-  expiresAt: number;
-  user: {
-    id: string;
-    email: string;
-    role: string;
-    endUserType?: string;
-  };
-}
-
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -37,12 +26,9 @@ export class AuthService {
     private mailService: MailService,
     private config: ConfigService,
     private casesService: CasesService,
-    @InjectModel(User.name) private userModel: Model<UserDocument>
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) {}
 
-  //
-  // Registration (with OTP)
-  //
   async registerAndSendOtp(dto: any) {
     const {
       email,
@@ -87,10 +73,14 @@ export class AuthService {
       emailVerified: false,
     } as any);
 
-    // create a case for the user (your business logic might differ)
-    await this.casesService.create(user._id.toString());
+    const createdCase = await this.casesService.create(user._id.toString());
 
-    // generate and send OTP
+    await this.userModel.findByIdAndUpdate(
+      user._id,
+      { $set: { inviteCaseId: createdCase._id } },
+      { new: true },
+    );
+
     const otpResult = await this.generateAndSendVerificationOtp(user);
 
     return {
@@ -99,20 +89,26 @@ export class AuthService {
     };
   }
 
-  // Generate numeric OTP, save to user, and send via mail service
   async generateAndSendVerificationOtp(user: any) {
     const otpLength = Number(this.config.get('OTP_LENGTH') || 6);
     const otp = this.generateNumericOtp(otpLength);
     const expires = new Date(
-      Date.now() + Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000,
+      Date.now() +
+        Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000,
     );
 
     // store OTP on user
-    await this.usersService.setEmailVerificationOtp(user._id.toString(), otp, expires);
+    await this.usersService.setEmailVerificationOtp(
+      user._id.toString(),
+      otp,
+      expires,
+    );
 
     // attempt to send OTP email (don't fail registration if emailing fails)
     try {
-      await this.mailService.sendVerificationOtp(user.email, otp, { expiresAt: expires });
+      await this.mailService.sendVerificationOtp(user.email, otp, {
+        expiresAt: expires,
+      });
     } catch (err) {
       // log and continue; user can resend OTP
       this.logger.error('Failed to send verification OTP', err as any);
@@ -121,8 +117,7 @@ export class AuthService {
     return { otp, expiresAt: expires.getTime() };
   }
 
-  // Verify OTP for registration - marks emailVerified and signs user
-  async verifyRegistrationOtp(email: string, otp: string): Promise<SignedUser> {
+  async verifyRegistrationOtp(email: string, otp: string): Promise<any> {
     const normalizedEmail = email?.toLowerCase?.();
     if (!normalizedEmail) throw new BadRequestException('Email required');
 
@@ -132,22 +127,21 @@ export class AuthService {
     if (!user.emailVerificationOtp || user.emailVerificationOtp !== otp) {
       throw new BadRequestException('Invalid OTP');
     }
-    if (!user.emailVerificationOtpExpires || user.emailVerificationOtpExpires < new Date()) {
+    if (
+      !user.emailVerificationOtpExpires ||
+      user.emailVerificationOtpExpires < new Date()
+    ) {
       throw new BadRequestException('OTP expired');
     }
 
-    // mark verified and clear OTP
     await this.usersService.markEmailVerified(user._id.toString());
     await this.usersService.clearEmailVerificationOtp(user._id.toString());
 
-    // Re-fetch user to ensure latest fields (optional)
     const freshUser = await this.usersService.findById(user._id.toString());
 
-    // sign and return
     return this.signUser(freshUser);
   }
 
-  // Resend OTP (if user exists and not verified)
   async resendRegistrationOtp(email: string) {
     const normalizedEmail = email?.toLowerCase?.();
     if (!normalizedEmail) return;
@@ -156,41 +150,20 @@ export class AuthService {
     if (!user) return;
 
     if (user.emailVerified) {
-      // already verified - nothing to do
       return;
     }
 
     await this.generateAndSendVerificationOtp(user);
   }
 
-  //
-  // Existing auth helpers
-  //
-  signUser(user: any): SignedUser {
-    const payload = { id: user._id.toString(), role: user.role };
-    const token = this.jwtService.sign(payload);
-
-    const decoded: any = this.jwtService.decode(token);
-    const expiresAt = decoded?.exp
-      ? decoded.exp * 1000
-      : Date.now() + 7 * 24 * 60 * 60 * 1000;
-
-    return {
-      token,
-      expiresAt,
-      user: {
-        id: user._id.toString(),
-        email: user.email,
-        role: user.role,
-        endUserType: user.endUserType,
-      },
-    };
-  }
-
   async validateUser(email: string, password: string) {
     const user = await this.usersService.findByEmail(email);
+
     if (!user) return null;
-    const ok = await this.usersService.comparePassword(password, user.passwordHash);
+    const ok = await this.usersService.comparePassword(
+      password,
+      user.passwordHash,
+    );
     if (!ok) return null;
     return user;
   }
@@ -203,7 +176,8 @@ export class AuthService {
     }
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(
-      Date.now() + Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
+      Date.now() +
+        Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
     );
     await this.usersService.setResetToken(user._id.toString(), token, expires);
     const resetUrl = `${this.config.get('APP_BASE_URL')}/auth/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
@@ -221,9 +195,6 @@ export class AuthService {
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
 
-  //
-  // Invite acceptance (existing logic)
-  //
   async acceptInvite(
     caseId: string,
     token: string,
@@ -231,33 +202,29 @@ export class AuthService {
     password?: string,
     name?: string,
   ) {
-    // 1) validate case & invite token
     const caseDoc = await this.casesService.findById(caseId);
     if (!caseDoc) throw new BadRequestException('Invalid case or invite');
+
     if (!caseDoc.inviteToken || caseDoc.inviteToken !== token)
       throw new BadRequestException('Invalid token');
+
     if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date())
       throw new BadRequestException('Invite expired');
 
     if (
       !caseDoc.invitedEmail ||
       caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()
-    ) {
+    )
       throw new BadRequestException('Invite email mismatch');
-    }
 
-    // 2) ensure user does not already exist
     const existing = await this.usersService.findByEmail(email);
     if (existing) throw new BadRequestException('User already exists');
 
-    // 3) generate password (if not provided)
     const userPassword = password || this.usersService.generateRandomPassword();
 
-    // 4) hash
     const passwordHash = await this.usersService.hashPassword(userPassword);
     const acceptedTerms = true;
 
-    // 5) create user with try/catch and debug logging
     let user;
     try {
       user = await this.usersService.create({
@@ -269,14 +236,18 @@ export class AuthService {
         invitedBy: caseDoc.owner,
         inviteCaseId: caseDoc._id,
         acceptedTerms: acceptedTerms,
-        emailVerified: true, // invited users considered verified by invite flow
+        emailVerified: true,
       } as any);
     } catch (err) {
       this.logger?.error?.('User creation failed in acceptInvite', err as any);
       throw new BadRequestException('Failed to create invited user');
     }
 
-    // 6) defensive check: ensure we have an id to attach
+    await this.userModel.updateOne(
+      { _id: caseDoc.owner },
+      { $set: { invitedUser: user._id } },
+    );
+
     const createdId =
       user && (user as any)._id
         ? (user as any)._id.toString()
@@ -289,17 +260,14 @@ export class AuthService {
       throw new BadRequestException('User creation did not return id');
     }
 
-    // 7) Attach user to case (this clears invite token inside attachInvitedUser)
     await this.casesService.attachInvitedUser(caseId, createdId);
 
-    // 8) store invite credentials (use service method to avoid VersionError)
     await this.casesService.setInviteCredentials(caseId, {
       email: email.toLowerCase(),
       password: userPassword,
       createdAt: new Date(),
     });
 
-    // 9) Send email with credentials (catch errors but don't crash)
     try {
       await this.mailService.sendInviteCredentials(
         email,
@@ -307,16 +275,92 @@ export class AuthService {
         caseDoc._id.toString(),
       );
     } catch (err) {
-      this.logger?.error?.('Failed to send invite credentials email', err as any);
+      this.logger?.error?.(
+        'Failed to send invite credentials email',
+        err as any,
+      );
     }
 
-    // 10) return signed user (token)
     return this.signUser(user);
+  }
+
+  async getUserProfile(id: string): Promise<User> {
+    const user = await this.usersService.findById(id);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return user;
+  }
+
+  async deletePartner(currentUserId: string): Promise<{ message: string }> {
+    const user = await this.userModel.findById(currentUserId);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.invitedUser) {
+      throw new BadRequestException('No partner linked to this user');
+    }
+
+    const partner = await this.userModel.findByIdAndDelete(
+      user.invitedUser._id,
+    );
+    if (!partner) {
+      throw new NotFoundException('Partner not found');
+    }
+
+    partner.invitedBy = null;
+    user.invitedUser = null;
+
+    await user.save();
+
+    if (user.inviteCaseId) {
+      await this.casesService.deleteCaseDataForPartner(
+        user.inviteCaseId.toString(),
+      );
+    }
+
+    return { message: 'Partner removed successfully' };
   }
 
   //
   // Utilities
   //
+
+  signUser(user: any): any {
+    const payload = { id: user._id.toString(), role: user.role };
+    const token = this.jwtService.sign(payload);
+
+    const decoded: any = this.jwtService.decode(token);
+    const expiresAt = decoded?.exp
+      ? decoded.exp * 1000
+      : Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+    return {
+      token,
+      expiresAt,
+      user: {
+        _id: user._id?.toString ? user._id.toString() : user._id,
+        firstName: user?.firstName,
+        middleName: user?.middleName,
+        lastName: user?.lastName,
+        email: user.email,
+        phone: user?.phone,
+        suffix: user?.suffix,
+        dateOfBirth: user?.dateOfBirth ? user?.dateOfBirth.toISOString() : null,
+        role: user.role,
+        invitedBy: user.invitedBy,
+        invitedUser: user.invitedUser,
+        endUserType: user.endUserType,
+        acceptedTerms: !!user?.acceptedTerms,
+        marketingConsent: !!user?.marketingConsent,
+        paymentDone: !!(user as any)?.paymentDone,
+      },
+    };
+  }
+
   generateRandomPassword(length = 12): string {
     const chars =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
@@ -327,10 +371,19 @@ export class AuthService {
     return result;
   }
 
-
   async updateUserProfile(id: string, updateDto: UpdateUserDto): Promise<User> {
-      const user = await this.userModel.findByIdAndUpdate(
-        id,
+    const findUser = await this.usersService.findById(id);
+
+    if (!findUser) {
+      throw new NotFoundException('User not found');
+    }
+
+    const updates: Promise<any>[] = [];
+
+    // update current user
+    updates.push(
+      this.userModel.findByIdAndUpdate(
+        findUser._id,
         {
           $set: {
             firstName: updateDto.firstName,
@@ -339,25 +392,37 @@ export class AuthService {
             suffix: updateDto.suffix,
             email: updateDto.email,
             dateOfBirth: updateDto.dateOfBirth,
-            fianceDetails: {
+          },
+        },
+        { new: true, runValidators: true },
+      ),
+    );
+
+    // update partner if exists
+    if (findUser.invitedUser) {
+      updates.push(
+        this.userModel.findByIdAndUpdate(
+          findUser.invitedUser,
+          {
+            $set: {
               firstName: updateDto.fianceFirstName,
               middleName: updateDto.fianceMiddleName,
               lastName: updateDto.fianceLastName,
               suffix: updateDto.fianceSuffix,
-              dateOfBirth: updateDto.fianceDateOfBirth,
               email: updateDto.fianceEmail,
+              dateOfBirth: updateDto.fianceDateOfBirth,
             },
           },
-        },
-        { new: true, runValidators: true },
+          { new: true, runValidators: true },
+        ),
       );
-  
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-  
-      return user;
     }
+
+    const [updatedUser] = await Promise.all(updates);
+
+    return updatedUser;
+  }
+
   private generateNumericOtp(length = 6): string {
     const min = Math.pow(10, length - 1);
     const max = Math.pow(10, length) - 1;
