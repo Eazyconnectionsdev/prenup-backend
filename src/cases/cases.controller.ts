@@ -63,7 +63,7 @@ export class CasesController {
   constructor(
     private casesService: CasesService,
     private lawyersService: LawyersService,
-  ) {}
+  ) { }
 
   private ensureUser(req: any) {
     const user = req.user;
@@ -634,14 +634,14 @@ export class CasesController {
         person1FutureInheritance: {
           originalAmount:
             body.sooriyaFutureInheritance &&
-            body.sooriyaFutureInheritance.originalAmount !== undefined
+              body.sooriyaFutureInheritance.originalAmount !== undefined
               ? body.sooriyaFutureInheritance.originalAmount
               : null,
           originalCurrency:
             body.sooriyaFutureInheritance?.originalCurrency ?? null,
           gbpEquivalent:
             body.sooriyaFutureInheritance &&
-            body.sooriyaFutureInheritance.gbpEquivalent !== undefined
+              body.sooriyaFutureInheritance.gbpEquivalent !== undefined
               ? body.sooriyaFutureInheritance.gbpEquivalent
               : null,
           basisOfEstimate:
@@ -651,14 +651,14 @@ export class CasesController {
         person2FutureInheritance: {
           originalAmount:
             body.gomathiFutureInheritance &&
-            body.gomathiFutureInheritance.originalAmount !== undefined
+              body.gomathiFutureInheritance.originalAmount !== undefined
               ? body.gomathiFutureInheritance.originalAmount
               : null,
           originalCurrency:
             body.gomathiFutureInheritance?.originalCurrency ?? null,
           gbpEquivalent:
             body.gomathiFutureInheritance &&
-            body.gomathiFutureInheritance.gbpEquivalent !== undefined
+              body.gomathiFutureInheritance.gbpEquivalent !== undefined
               ? body.gomathiFutureInheritance.gbpEquivalent
               : null,
           basisOfEstimate:
@@ -903,4 +903,47 @@ export class CasesController {
       case: updatedCase,
     };
   }
+
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/approve')
+  async approveByUser(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    return this.casesService.approveCaseByUser(
+      id,
+      user.id ?? user._id,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/approve-lawyer')
+  async approveByLawyer(
+    @Req() req,
+    @Param('id') id: string,
+    @Body() body: { lawyerId?: string },
+  ) {
+    if (!body?.lawyerId) {
+      throw new BadRequestException('lawyerId required');
+    }
+
+    return this.casesService.approveCaseByLawyer(
+      id,
+      body.lawyerId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/approve-manager')
+  async approveByCaseManager(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Only case managers/admins');
+    }
+
+    return this.casesService.approveCaseByManager(
+      id,
+      user.id ?? user._id,
+    );
+  }
+
 }
