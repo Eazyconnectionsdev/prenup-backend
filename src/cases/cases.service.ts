@@ -13,6 +13,7 @@ import {
   CaseDocument,
   StepStatus,
   PreQuestionnaire,
+  Approval,
 } from './schemas/case.schema';
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { MailService } from '../mail/mail.service';
@@ -24,7 +25,7 @@ export class CasesService {
     @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>,
     private config: ConfigService,
     private mailService: MailService,
-  ) {}
+  ) { }
 
   // -----------------------
   // Utility helpers
@@ -151,9 +152,9 @@ export class CasesService {
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(
       Date.now() +
-        Number(this.config.get('INVITE_TOKEN_EXPIRY_HOURS') || 72) *
-          3600 *
-          1000,
+      Number(this.config.get('INVITE_TOKEN_EXPIRY_HOURS') || 72) *
+      3600 *
+      1000,
     );
 
     c.invitedEmail = inviteEmail.toLowerCase();
@@ -560,4 +561,109 @@ export class CasesService {
       throw new NotFoundException('Case not found');
     }
   }
+
+  private ensureApprovalObj(c: CaseDocument): Approval {
+    if (!c.approval) (c as any).approval = {};
+    return (c as any).approval as Approval;
+  }
+
+
+  async approveCaseByUser(
+    caseId: string,
+    actorId: string,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    // Must be fully locked & both pre-questionnaires submitted
+    if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
+      throw new BadRequestException(
+        'Case must be fully locked and completed before approval',
+      );
+    }
+
+    const actorObjId = new Types.ObjectId(actorId);
+
+    const isOwner = c.owner?.toString() === actorObjId.toString();
+    const isInvited = c.invitedUser?.toString() === actorObjId.toString();
+
+    if (!isOwner && !isInvited) {
+      throw new ForbiddenException('Actor not part of this case');
+    }
+
+    const now = new Date();
+
+    // ensure approval object exists
+    const approval = this.ensureApprovalObj(c);
+
+    if (isOwner) {
+      approval.user1Approved = true;
+      approval.user1ApprovedAt = now;
+    } else {
+      approval.user2Approved = true;
+      approval.user2ApprovedAt = now;
+    }
+
+    await c.save();
+    return c;
+  }
+
+
+  async approveCaseByLawyer(
+    caseId: string,
+    lawyerId: string,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId) || !Types.ObjectId.isValid(lawyerId)) {
+      throw new BadRequestException('Invalid ids');
+    }
+
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    // Ensure lawyer was selected
+    const selected =
+      c.preQuestionnaireUser1?.selectedLawyer?.toString() === lawyerId ||
+      c.preQuestionnaireUser2?.selectedLawyer?.toString() === lawyerId;
+
+    if (!selected) {
+      throw new ForbiddenException('Lawyer not selected for this case');
+    }
+
+    // ensure approval object exists
+    const approval = this.ensureApprovalObj(c);
+
+    approval.lawyerApproved = true;
+    approval.lawyerApprovedAt = new Date();
+    approval.approvedLawyer = new Types.ObjectId(lawyerId);
+
+    await c.save();
+    return c;
+  }
+
+
+  async approveCaseByManager(
+    caseId: string,
+    actorId: string,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    // ensure approval object exists
+    const approval = this.ensureApprovalObj(c);
+
+    approval.caseManagerApproved = true;
+    approval.caseManagerApprovedAt = new Date();
+
+    await c.save();
+    return c;
+  }
+
 }
