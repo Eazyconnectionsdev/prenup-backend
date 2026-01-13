@@ -1,9 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import { Case, CaseDocument, StepStatus, PreQuestionnaire } from './schemas/case.schema';
+import {
+  Case,
+  CaseDocument,
+  StepStatus,
+  PreQuestionnaire,
+} from './schemas/case.schema';
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { MailService } from '../mail/mail.service';
 
@@ -14,7 +24,7 @@ export class CasesService {
     @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>,
     private config: ConfigService,
     private mailService: MailService,
-  ) { }
+  ) {}
 
   // -----------------------
   // Utility helpers
@@ -35,7 +45,10 @@ export class CasesService {
   }
 
   /** Ensure a StepStatus exists on the case for a dynamic step key ("step1".."step7"). */
-  private ensureStepStatusObj(c: CaseDocument, stepKey: `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`): StepStatus {
+  private ensureStepStatusObj(
+    c: CaseDocument,
+    stepKey: `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`,
+  ): StepStatus {
     // c.status may be undefined initially
     c.status = c.status || {};
     // use any for dynamic property access, but populate with a properly typed object
@@ -67,7 +80,7 @@ export class CasesService {
   public areAllStepsSubmitted(c: CaseDocument): boolean {
     if (!c || !c.status) return false;
     for (let i = 1; i <= 7; i++) {
-      const sk = `step${i}` as `step${1|2|3|4|5|6|7}`;
+      const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
       const s = (c.status as any)[sk];
       if (!s || !s.submitted) return false;
     }
@@ -79,7 +92,10 @@ export class CasesService {
   // -----------------------
 
   async create(ownerId: string, title?: string): Promise<CaseDocument> {
-    const c = new this.caseModel({ title: title || 'Untitled case', owner: new Types.ObjectId(ownerId) });
+    const c = new this.caseModel({
+      title: title || 'Untitled case',
+      owner: new Types.ObjectId(ownerId),
+    });
     return c.save();
   }
 
@@ -87,7 +103,9 @@ export class CasesService {
     if (!Types.ObjectId.isValid(id)) return null;
     const q = this.caseModel.findById(id);
     if (populate) {
-      q.populate('owner invitedUser preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer');
+      q.populate(
+        'owner invitedUser preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer',
+      );
     }
     return q.exec();
   }
@@ -98,18 +116,25 @@ export class CasesService {
 
   async findByUser(userId: string | Types.ObjectId): Promise<CaseDocument[]> {
     const id = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
-    return this.caseModel.find({ $or: [{ owner: id }, { invitedUser: id }] }).exec();
+    return this.caseModel
+      .find({ $or: [{ owner: id }, { invitedUser: id }] })
+      .exec();
   }
 
-  async findByUserId(userId: Types.ObjectId): Promise<CaseDocument | null> {
-    return this.caseModel.findOne({ owner: userId }).exec();
+  async findByCaseId(
+    caseId: Types.ObjectId | null,
+  ): Promise<CaseDocument | null> {
+    return this.caseModel.findOne({ _id: caseId }).exec();
   }
 
   // -----------------------
   // Invite / attach
   // -----------------------
 
-  async attachInvitedUser(caseId: string, userId: string): Promise<CaseDocument> {
+  async attachInvitedUser(
+    caseId: string,
+    userId: string,
+  ): Promise<CaseDocument> {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
@@ -124,7 +149,12 @@ export class CasesService {
     if (!c) throw new NotFoundException('Case not found');
 
     const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + Number(this.config.get('INVITE_TOKEN_EXPIRY_HOURS') || 72) * 3600 * 1000);
+    const expires = new Date(
+      Date.now() +
+        Number(this.config.get('INVITE_TOKEN_EXPIRY_HOURS') || 72) *
+          3600 *
+          1000,
+    );
 
     c.invitedEmail = inviteEmail.toLowerCase();
     c.inviteToken = token;
@@ -156,8 +186,14 @@ export class CasesService {
    *
    * controller should already guard who may call updateStep (privileged vs end-user).
    */
-  async updateStep(caseId: string, stepNumber: number, data: any, actorId: string): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
+  async updateStep(
+    caseId: string,
+    stepNumber: number,
+    data: any,
+    actorId: string,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
@@ -167,10 +203,12 @@ export class CasesService {
 
     // If case is fully locked, deny any update.
     if (c.fullyLocked) {
-      throw new ForbiddenException('Case is fully locked and cannot be modified');
+      throw new ForbiddenException(
+        'Case is fully locked and cannot be modified',
+      );
     }
 
-    const key = `step${stepNumber}` as `step${1|2|3|4|5|6|7}`;
+    const key = `step${stepNumber}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
     // write the actual step payload (StepXDetails) onto the case doc
     (c as any)[key] = data;
 
@@ -188,7 +226,7 @@ export class CasesService {
 
       const now = new Date();
       for (let i = 1; i <= 7; i++) {
-        const sk = `step${i}` as `step${1|2|3|4|5|6|7}`;
+        const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
         const s = this.ensureStepStatusObj(c, sk);
         s.locked = true;
         s.lockedBy = new Types.ObjectId(actorId);
@@ -211,7 +249,8 @@ export class CasesService {
    * - clears fullyLocked metadata and clears per-step locked flags while setting unlocked audit.
    */
   async unlockCase(caseId: string, actorId: string): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
@@ -219,13 +258,18 @@ export class CasesService {
     this.ensureStepStatusObj(c, 'step7');
 
     const step7Status = (c.status as any).step7 as StepStatus;
-    const step7Submitted = Boolean(step7Status.submitted) || Boolean(step7Status.submittedAt);
+    const step7Submitted =
+      Boolean(step7Status.submitted) || Boolean(step7Status.submittedAt);
 
     if (!c.fullyLocked && !step7Submitted) {
-      throw new BadRequestException('Case is not fully locked nor locked by step 7 submission');
+      throw new BadRequestException(
+        'Case is not fully locked nor locked by step 7 submission',
+      );
     }
 
-    const actorObjId = Types.ObjectId.isValid(actorId) ? new Types.ObjectId(actorId) : null;
+    const actorObjId = Types.ObjectId.isValid(actorId)
+      ? new Types.ObjectId(actorId)
+      : null;
     const now = new Date();
 
     // clear full-lock metadata
@@ -235,7 +279,7 @@ export class CasesService {
 
     // clear all step locks and set unlockedBy/unlockedAt audit fields
     for (let i = 1; i <= 7; i++) {
-      const sk = `step${i}` as `step${1|2|3|4|5|6|7}`;
+      const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
       const s = this.ensureStepStatusObj(c, sk);
       s.locked = false;
       s.lockedBy = null;
@@ -268,9 +312,15 @@ export class CasesService {
    * Update PreQuestionnaire fields directly (used by controller convenience)
    * Expects dotted paths, e.g. { 'preQuestionnaireUser1.answers': [...], 'preQuestionnaireUser1.selectedLawyer': ObjectId(...) }
    */
-  async updatePreQuestionnaire(caseId: string, updatePatch: any): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    const updated = await this.caseModel.findByIdAndUpdate(caseId, { $set: updatePatch }, { new: true }).exec();
+  async updatePreQuestionnaire(
+    caseId: string,
+    updatePatch: any,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
+    const updated = await this.caseModel
+      .findByIdAndUpdate(caseId, { $set: updatePatch }, { new: true })
+      .exec();
     if (!updated) throw new NotFoundException('Case not found');
     return updated;
   }
@@ -280,34 +330,47 @@ export class CasesService {
    *
    * NEW: pre-questionnaire submission is only allowed after all steps are submitted AND the case is fully locked.
    */
-  async submitPreQuestionnaire(caseId: string, actorId: string, answers: string[]): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
+  async submitPreQuestionnaire(
+    caseId: string,
+    actorId: string,
+    answers: string[],
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
     // New rule: allow pre-questionnaire submission only after the case is fully locked AND all steps submitted.
     if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
-      throw new BadRequestException('Pre-questionnaire can only be submitted after all steps are submitted and the case is fully locked');
+      throw new BadRequestException(
+        'Pre-questionnaire can only be submitted after all steps are submitted and the case is fully locked',
+      );
     }
 
     const actorObjId = new Types.ObjectId(actorId);
     const ownerIsObj = c.owner instanceof Types.ObjectId;
-    const isOwner = ownerIsObj && (c.owner as Types.ObjectId).equals(actorObjId);
-    const isInvited = c.invitedUser instanceof Types.ObjectId && (c.invitedUser as Types.ObjectId).equals(actorObjId);
+    const isOwner =
+      ownerIsObj && (c.owner as Types.ObjectId).equals(actorObjId);
+    const isInvited =
+      c.invitedUser instanceof Types.ObjectId &&
+      (c.invitedUser as Types.ObjectId).equals(actorObjId);
 
-    if (!isOwner && !isInvited) throw new ForbiddenException('Actor not part of this case');
+    if (!isOwner && !isInvited)
+      throw new ForbiddenException('Actor not part of this case');
 
     const now = new Date();
 
     if (isOwner) {
-      if (!c.preQuestionnaireUser1) c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
+      if (!c.preQuestionnaireUser1)
+        c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
 
       c.preQuestionnaireUser1.answers = answers ?? [];
       c.preQuestionnaireUser1.submitted = true;
       c.preQuestionnaireUser1.submittedBy = actorObjId;
       c.preQuestionnaireUser1.submittedAt = now;
     } else {
-      if (!c.preQuestionnaireUser2) c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
+      if (!c.preQuestionnaireUser2)
+        c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
 
       c.preQuestionnaireUser2.answers = answers ?? [];
       c.preQuestionnaireUser2.submitted = true;
@@ -323,16 +386,25 @@ export class CasesService {
   // Lawyer selection
   // -----------------------
 
-  async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = false): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    if (!Types.ObjectId.isValid(lawyerId)) throw new BadRequestException('Invalid lawyer id');
+  async selectLawyer(
+    caseId: string,
+    actorId: string,
+    lawyerId: string,
+    force = false,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
+    if (!Types.ObjectId.isValid(lawyerId))
+      throw new BadRequestException('Invalid lawyer id');
 
     const c = await this.caseModel.findById(caseId).exec();
     if (!c) throw new NotFoundException('Case not found');
 
     // New rule: lawyer selection is allowed *only* after the case is fully locked AND all steps are submitted.
     if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
-      throw new BadRequestException('Lawyer selection is allowed only after all steps are submitted and the case is fully locked');
+      throw new BadRequestException(
+        'Lawyer selection is allowed only after all steps are submitted and the case is fully locked',
+      );
     }
 
     if (!Types.ObjectId.isValid(actorId)) {
@@ -344,9 +416,12 @@ export class CasesService {
       if (!val) return null;
       if (val instanceof Types.ObjectId) return val;
       if (typeof val === 'object' && val._id) {
-        return (val._id instanceof Types.ObjectId) ? val._id : new Types.ObjectId(val._id.toString());
+        return val._id instanceof Types.ObjectId
+          ? val._id
+          : new Types.ObjectId(val._id.toString());
       }
-      if (typeof val === 'string' && Types.ObjectId.isValid(val)) return new Types.ObjectId(val);
+      if (typeof val === 'string' && Types.ObjectId.isValid(val))
+        return new Types.ObjectId(val);
       return null;
     };
 
@@ -355,7 +430,8 @@ export class CasesService {
 
     const equalsId = (idA: Types.ObjectId | null, idB: Types.ObjectId) => {
       if (!idA) return false;
-      if (typeof (idA as any).equals === 'function') return (idA as any).equals(idB);
+      if (typeof (idA as any).equals === 'function')
+        return (idA as any).equals(idB);
       return idA.toString() === idB.toString();
     };
 
@@ -367,10 +443,16 @@ export class CasesService {
     }
 
     // ensure both parties have submitted
-    const p1Submitted = !!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted);
-    const p2Submitted = !!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted);
+    const p1Submitted = !!(
+      c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted
+    );
+    const p2Submitted = !!(
+      c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted
+    );
     if (!p1Submitted || !p2Submitted) {
-      throw new BadRequestException('Both parties must submit their pre-questionnaires before selecting lawyers');
+      throw new BadRequestException(
+        'Both parties must submit their pre-questionnaires before selecting lawyers',
+      );
     }
 
     const lawyerDoc = await this.lawyerModel.findById(lawyerId).exec();
@@ -379,19 +461,25 @@ export class CasesService {
     if (isOwner) {
       const otherSelected = c.preQuestionnaireUser2?.selectedLawyer?.toString();
       if (otherSelected === lawyerId && !force) {
-        throw new BadRequestException('This lawyer has already been chosen by the other party');
+        throw new BadRequestException(
+          'This lawyer has already been chosen by the other party',
+        );
       }
 
-      if (!c.preQuestionnaireUser1) c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
+      if (!c.preQuestionnaireUser1)
+        c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
       c.preQuestionnaireUser1.selectedLawyer = new Types.ObjectId(lawyerId);
       (c.preQuestionnaireUser1 as any).selectedAt = new Date();
     } else {
       const otherSelected = c.preQuestionnaireUser1?.selectedLawyer?.toString();
       if (otherSelected === lawyerId && !force) {
-        throw new BadRequestException('This lawyer has already been chosen by the other party');
+        throw new BadRequestException(
+          'This lawyer has already been chosen by the other party',
+        );
       }
 
-      if (!c.preQuestionnaireUser2) c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
+      if (!c.preQuestionnaireUser2)
+        c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
       c.preQuestionnaireUser2.selectedLawyer = new Types.ObjectId(lawyerId);
       (c.preQuestionnaireUser2 as any).selectedAt = new Date();
     }
@@ -401,7 +489,13 @@ export class CasesService {
   }
 
   async isLawyerSelected(caseId: string, lawyerId: string): Promise<boolean> {
-    const c = await this.caseModel.findById(caseId).select('preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer').lean().exec();
+    const c = await this.caseModel
+      .findById(caseId)
+      .select(
+        'preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer',
+      )
+      .lean()
+      .exec();
     if (!c) throw new NotFoundException('Case not found');
     const l1 = c.preQuestionnaireUser1?.selectedLawyer?.toString();
     const l2 = c.preQuestionnaireUser2?.selectedLawyer?.toString();
@@ -410,20 +504,60 @@ export class CasesService {
 
   async listLawyers(limit = 50, page = 1) {
     const skip = (page - 1) * limit;
-    const docs = await this.lawyerModel.find().skip(skip).limit(limit).lean().exec();
+    const docs = await this.lawyerModel
+      .find()
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec();
     const total = await this.lawyerModel.countDocuments().exec();
     return { total, docs };
   }
 
-  async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
+  async setInviteCredentials(
+    caseId: string,
+    creds: { email: string; password: string; createdAt: Date },
+  ) {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
     }
 
-    return this.caseModel.findByIdAndUpdate(
+    return this.caseModel
+      .findByIdAndUpdate(
+        caseId,
+        { inviteCredentials: creds },
+        { new: true, useFindAndModify: false },
+      )
+      .exec();
+  }
+
+  async deleteCaseDataForPartner(caseId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    const updated = await this.caseModel.findByIdAndUpdate(
       caseId,
-      { inviteCredentials: creds },
-      { new: true, useFindAndModify: false }
-    ).exec();
+      {
+        $set: {
+          // reset partner steps data (if required)
+          step3: {},
+          step4: {},
+
+          'status.step3.submitted': false,
+          'status.step3.submittedBy': null,
+          'status.step3.submittedAt': null,
+
+          'status.step4.submitted': false,
+          'status.step4.submittedBy': null,
+          'status.step4.submittedAt': null,
+        },
+      },
+      { new: true },
+    );
+
+    if (!updated) {
+      throw new NotFoundException('Case not found');
+    }
   }
 }

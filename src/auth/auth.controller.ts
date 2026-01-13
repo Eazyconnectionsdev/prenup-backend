@@ -1,4 +1,4 @@
-// src/auth/auth.controller.ts
+
 import {
   Body,
   Controller,
@@ -10,10 +10,13 @@ import {
   Req,
   Res,
   UseGuards,
-  BadRequestException,
   NotFoundException,
   UnauthorizedException,
+  Put,
+  Delete,
+  Param,
 } from '@nestjs/common';
+
 import type { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -22,9 +25,12 @@ import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { CasesService } from '../cases/cases.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
+import { UpdateUserDto } from './dto/update-user.dto';
+
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
+
 
 @Controller('auth')
 export class AuthController {
@@ -42,24 +48,25 @@ export class AuthController {
       message: 'Registration successful. An OTP has been sent to your email for verification.',
       email: result.email,
       expiresAt: result.expiresAt,
+      success : true
     };
   }
 
   @Post('login')
   @HttpCode(200)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+
     const user = await this.authService.validateUser(dto.email, dto.password);
     if (!user) {
-      // return proper 401 Unauthorized status
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.emailVerified) {
-      // Unverified email — also 401 (you can change to 403 if you prefer)
       throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
 
-    const userCase = await this.casesService.findByUserId(user._id);
+    const userCase = await this.casesService.findByCaseId(user.inviteCaseId);
+    
     const signed = this.authService.signUser(user);
     const token = signed.token;
     const expiresAt = signed.expiresAt;
@@ -77,6 +84,7 @@ export class AuthController {
     });
 
     return {
+      success: true,
       user: {
         _id: user._id?.toString ? user._id.toString() : user._id,
         firstName: user?.firstName,
@@ -84,14 +92,15 @@ export class AuthController {
         lastName: user?.lastName,
         email: user.email,
         phone: user?.phone,
-        fianceDetails: user?.fianceDetails || {},
         suffix: user?.suffix,
         dateOfBirth: user?.dateOfBirth ? user?.dateOfBirth.toISOString() : null,
         role: user.role,
+        inviteCaseId: user.inviteCaseId,
+        invitedBy: user.invitedBy,
+        invitedUser: user.invitedUser,
         endUserType: user.endUserType,
         acceptedTerms: !!user?.acceptedTerms,
         marketingConsent: !!user?.marketingConsent,
-        // <-- payment lock flag
         paymentDone: !!(user as any)?.paymentDone,
       },
       caseId:
@@ -130,6 +139,72 @@ export class AuthController {
     return { message: 'Password reset successful' };
   }
 
+
+  @Post('verify-otp')
+  @HttpCode(200)
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
+    
+    const token = signed.token;
+    const expiresAt = signed.expiresAt;
+    const maxAge = expiresAt
+      ? Math.max(0, expiresAt - Date.now())
+      : 7 * 24 * 60 * 60 * 1000;
+
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite:
+        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
+      maxAge,
+      path: '/',
+    });
+
+    const userDoc = await this.usersService.findById(signed.user._id);
+    if (!userDoc) {
+      throw new NotFoundException('User not found after verification');
+    }
+
+    const userCase = await this.casesService.findByCaseId(userDoc.inviteCaseId);
+
+    return {
+      success: true,
+      user: {
+        _id: userDoc._id?.toString ? userDoc._id.toString() : userDoc._id,
+        firstName: userDoc?.firstName,
+        middleName: userDoc?.middleName,
+        lastName: userDoc?.lastName,
+        email: userDoc.email,
+        phone: userDoc?.phone,
+        suffix: userDoc?.suffix,
+        dateOfBirth: userDoc?.dateOfBirth ? userDoc.dateOfBirth.toISOString() : null,
+        role: userDoc.role,
+        inviteCaseId: userDoc.inviteCaseId,
+        invitedBy: userDoc.invitedBy,
+        invitedUser: userDoc.invitedUser,
+        endUserType: userDoc.endUserType,
+        acceptedTerms: !!userDoc?.acceptedTerms,
+        marketingConsent: !!userDoc?.marketingConsent,
+        paymentDone: !!(userDoc as any)?.paymentDone,
+      },
+      caseId:
+        userCase && (userCase._id || userCase.id)
+          ? userCase._id
+            ? userCase._id.toString()
+            : userCase.id.toString()
+          : null,
+    };
+  }
+
+  @Post('resend-otp')
+  @HttpCode(200)
+  async resendOtp(@Body() dto: ResendOtpDto) {
+    await this.authService.resendRegistrationOtp(dto.email);
+    return { message: 'If that email exists and is unverified, a new OTP was sent.' };
+  }
+
+
+  
   @Get('accept-invite')
   @HttpCode(200)
   async acceptInvite(
@@ -170,75 +245,24 @@ export class AuthController {
     };
   }
 
-  @Post('verify-otp')
-  @HttpCode(200)
-  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
-    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
-
-    const token = signed.token;
-    const expiresAt = signed.expiresAt;
-    const maxAge = expiresAt
-      ? Math.max(0, expiresAt - Date.now())
-      : 7 * 24 * 60 * 60 * 1000;
-
-    res.cookie('access_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite:
-        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
-      maxAge,
-      path: '/',
-    });
-
-    // fetch full user document using UsersService
-    const userId = signed.user.id;
-    const userDoc = await this.usersService.findById(userId);
-    if (!userDoc) {
-      throw new NotFoundException('User not found after verification');
+    @UseGuards(JwtAuthGuard)
+    @Delete('/delete-partner')
+    async deletePartner(@Req() req) {
+      return this.authService.deletePartner(req.user.id);
     }
-
-    // pass the actual ObjectId to findByUserId (avoid string -> ObjectId type issues)
-    const userCase = await this.casesService.findByUserId(userDoc._id);
-
-    return {
-      user: {
-        _id: userDoc._id?.toString ? userDoc._id.toString() : userDoc._id,
-        firstName: userDoc?.firstName,
-        middleName: userDoc?.middleName,
-        lastName: userDoc?.lastName,
-        email: userDoc.email,
-        phone: userDoc?.phone,
-        fianceDetails: userDoc?.fianceDetails || {},
-        suffix: userDoc?.suffix,
-        dateOfBirth: userDoc?.dateOfBirth ? userDoc.dateOfBirth.toISOString() : null,
-        role: userDoc.role,
-        endUserType: userDoc.endUserType,
-        acceptedTerms: !!userDoc?.acceptedTerms,
-        marketingConsent: !!userDoc?.marketingConsent,
-        // <-- payment lock flag
-        paymentDone: !!(userDoc as any)?.paymentDone,
-      },
-      caseId:
-        userCase && (userCase._id || userCase.id)
-          ? userCase._id
-            ? userCase._id.toString()
-            : userCase.id.toString()
-          : null,
-    };
-  }
-
-  @Post('resend-otp')
-  @HttpCode(200)
-  async resendOtp(@Body() dto: ResendOtpDto) {
-    await this.authService.resendRegistrationOtp(dto.email);
-    return { message: 'If that email exists and is unverified, a new OTP was sent.' };
-  }
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
   @HttpCode(200)
-  me(@Req() req: Request & { user?: any }) {
-    // JwtAuthGuard will attach the user; return it directly
-    return req.user;
+  async me(@Req() req: Request & { user?: any }) {
+    const user = await this.authService.getUserProfile(req.user.id);
+    return { user };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put('update-details')
+  async updateDetails(@Req() req, @Body() dto: UpdateUserDto) {
+    const user = await this.authService.updateUserProfile(req.user.id, dto);
+    return user;
   }
 }

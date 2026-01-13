@@ -25,7 +25,10 @@ export class UsersService {
       throw new BadRequestException('Email is required to create user');
     }
     const normalized = payload.email.toLowerCase();
-    const existing = await this.userModel.findOne({ email: normalized }).lean().exec();
+    const existing = await this.userModel
+      .findOne({ email: normalized })
+      .lean()
+      .exec();
     if (existing) {
       throw new BadRequestException('Email already exists');
     }
@@ -40,19 +43,48 @@ export class UsersService {
   // Find by email (normalized)
   async findByEmail(email: string): Promise<UserDocument | null> {
     if (!email) return null;
-    return this.userModel.findOne({ email: email.toLowerCase() }).exec();
+    return this.userModel
+      .findOne({ email: email.toLowerCase() })
+      .populate([
+        {
+          path: 'invitedUser',
+          select:
+            '_id firstName middleName lastName email phone role endUserType dateOfBirth suffix',
+        },
+        {
+          path: 'invitedBy',
+          select:
+            '_id firstName middleName lastName email phone role endUserType dateOfBirth suffix',
+        },
+      ])
+      .exec();
   }
 
   // Find by id
   async findById(id: string): Promise<UserDocument | null> {
     if (!id) return null;
     if (!Types.ObjectId.isValid(id)) return null;
-    return this.userModel.findById(new Types.ObjectId(id)).exec();
+    return this.userModel
+      .findById(new Types.ObjectId(id))
+      .populate([
+        {
+          path: 'invitedUser',
+          select:
+            'firstName middleName lastName email phone role endUserType dateOfBirth suffix',
+        },
+        {
+          path: 'invitedBy',
+          select:
+            'firstName middleName lastName email phone role endUserType dateOfBirth suffix',
+        },
+      ])
+      .exec();
   }
 
   // Hash password
   async hashPassword(password: string): Promise<string> {
-    if (!password) throw new BadRequestException('Password required for hashing');
+    if (!password)
+      throw new BadRequestException('Password required for hashing');
     const salt = await bcrypt.genSalt(this.bcryptSaltRounds);
     return bcrypt.hash(password, salt);
   }
@@ -64,52 +96,78 @@ export class UsersService {
   }
 
   // Reset token helpers
-  async setResetToken(userId: string, token: string, expires: Date): Promise<void> {
-    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
-    await this.userModel.findByIdAndUpdate(userId, {
-      resetPasswordToken: token,
-      resetPasswordExpires: expires,
-    }).exec();
+  async setResetToken(
+    userId: string,
+    token: string,
+    expires: Date,
+  ): Promise<void> {
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        resetPasswordToken: token,
+        resetPasswordExpires: expires,
+      })
+      .exec();
   }
 
   async clearResetToken(userId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
-    await this.userModel.findByIdAndUpdate(userId, {
-      resetPasswordToken: null,
-      resetPasswordExpires: null,
-    }).exec();
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+      })
+      .exec();
   }
 
   async updatePassword(userId: string, passwordHash: string): Promise<void> {
-    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
-    await this.userModel.findByIdAndUpdate(userId, {
-      passwordHash,
-      resetPasswordToken: null,
-      resetPasswordExpires: null,
-    }).exec();
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        passwordHash,
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+      })
+      .exec();
   }
 
   // Email OTP helpers
-  async setEmailVerificationOtp(userId: string, otp: string, expires: Date): Promise<void> {
-    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
-    await this.userModel.findByIdAndUpdate(userId, {
-      emailVerificationOtp: otp,
-      emailVerificationOtpExpires: expires,
-    }).exec();
+  async setEmailVerificationOtp(
+    userId: string,
+    otp: string,
+    expires: Date,
+  ): Promise<void> {
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        emailVerificationOtp: otp,
+        emailVerificationOtpExpires: expires,
+      })
+      .exec();
   }
 
   async clearEmailVerificationOtp(userId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
-    await this.userModel.findByIdAndUpdate(userId, {
-      $unset: { emailVerificationOtp: '', emailVerificationOtpExpires: '' },
-    }).exec();
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        $unset: { emailVerificationOtp: '', emailVerificationOtpExpires: '' },
+      })
+      .exec();
   }
 
   async markEmailVerified(userId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
-    await this.userModel.findByIdAndUpdate(userId, {
-      emailVerified: true,
-    }).exec();
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+    await this.userModel
+      .findByIdAndUpdate(userId, {
+        emailVerified: true,
+      })
+      .exec();
   }
 
   // Utility: generate random token
@@ -119,7 +177,8 @@ export class UsersService {
 
   // Utility: generate random friendly password
   generateRandomPassword(length = 12): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+    const chars =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
     let result = '';
     for (let i = 0; i < length; i++) {
       result += chars.charAt(Math.floor(Math.random() * chars.length));
