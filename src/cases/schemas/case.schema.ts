@@ -2,6 +2,36 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
+@Schema({ _id: false })
+export class Approval {
+  @Prop({ type: Boolean, default: false })
+  user1Approved?: boolean;
+
+  @Prop({ type: Date, default: null })
+  user1ApprovedAt?: Date | null;
+
+  @Prop({ type: Boolean, default: false })
+  user2Approved?: boolean;
+
+  @Prop({ type: Date, default: null })
+  user2ApprovedAt?: Date | null;
+
+  @Prop({ type: Boolean, default: false })
+  lawyerApproved?: boolean;
+
+  @Prop({ type: Date, default: null })
+  lawyerApprovedAt?: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null })
+  approvedLawyer?: Types.ObjectId | null;
+
+  @Prop({ type: Boolean, default: false })
+  caseManagerApproved?: boolean;
+
+  @Prop({ type: Date, default: null })
+  caseManagerApprovedAt?: Date | null;
+}
+export const ApprovalSchema = SchemaFactory.createForClass(Approval);
 /**
  * Sub-schemas for repeated entries in Step 2 / 4 (financial items)
  */
@@ -347,6 +377,9 @@ export class Case {
 
   @Prop({ type: PreQuestionnaireSchema, default: {} })
   preQuestionnaireUser2: PreQuestionnaire;
+  
+  @Prop({ type: ApprovalSchema, default: {} })
+  approval?: Approval;
 
   // per-step status
   @Prop({
