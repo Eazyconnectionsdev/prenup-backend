@@ -467,10 +467,7 @@ export class CasesController {
   }
 
 
-  /**
-   * Update a specific step of a case (unchanged)
-   */
-  @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard)
   @Post(':id/steps/:stepNumber')
   async updateStep(
     @Req() req,
@@ -479,14 +476,17 @@ export class CasesController {
     @Body() body: any,
   ) {
     const user = this.ensureUser(req);
+    const isPrivileged = this.isPrivilegedRole(user.role);
     const updated = await this.casesService.updateStep(
       id,
       Number(stepNumberStr),
       body,
       user.id ?? user._id,
+      isPrivileged, 
     );
     return updated;
   }
+
 
   // privileged-only unlock endpoint
   @UseGuards(JwtAuthGuard)
