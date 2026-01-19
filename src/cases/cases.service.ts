@@ -165,12 +165,12 @@ export class CasesService {
   // -----------------------
   // Steps: update & locking
   // -----------------------
-
-  async updateStep(
+async updateStep(
     caseId: string,
     stepNumber: number,
     data: any,
     actorId: string,
+    isPrivileged = false, // new optional param
   ): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId))
       throw new BadRequestException('Invalid case id');
@@ -181,7 +181,8 @@ export class CasesService {
       throw new BadRequestException('Invalid step');
     }
 
-    if (c.fullyLocked) {
+    // allow privileged users to update even if fullyLocked
+    if (c.fullyLocked && !isPrivileged) {
       throw new ForbiddenException('Case is fully locked and cannot be modified');
     }
 
