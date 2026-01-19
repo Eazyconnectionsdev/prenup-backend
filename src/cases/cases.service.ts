@@ -31,7 +31,6 @@ export class CasesService {
   // Utility helpers
   // -----------------------
 
-  /** Properly shaped default for a StepStatus (keeps TypeScript happy). */
   private defaultStepStatus(): StepStatus {
     return {
       submitted: false,
@@ -45,14 +44,11 @@ export class CasesService {
     } as StepStatus;
   }
 
-  /** Ensure a StepStatus exists on the case for a dynamic step key ("step1".."step7"). */
   private ensureStepStatusObj(
     c: CaseDocument,
     stepKey: `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`,
   ): StepStatus {
-    // c.status may be undefined initially
     c.status = c.status || {};
-    // use any for dynamic property access, but populate with a properly typed object
     const statusAny = c.status as any;
     if (!statusAny[stepKey]) {
       statusAny[stepKey] = this.defaultStepStatus();
@@ -60,7 +56,6 @@ export class CasesService {
     return statusAny[stepKey] as StepStatus;
   }
 
-  /** Properly formed empty PreQuestionnaire object (typed) */
   private makeEmptyPreQuestionnaire(): PreQuestionnaire {
     return {
       answers: [],
@@ -74,10 +69,6 @@ export class CasesService {
     } as PreQuestionnaire;
   }
 
-  /**
-   * Return true if all steps 1..7 on the provided case document have been submitted.
-   * This is used to gate pre-questionnaire submission and lawyer selection.
-   */
   public areAllStepsSubmitted(c: CaseDocument): boolean {
     if (!c || !c.status) return false;
     for (let i = 1; i <= 7; i++) {
@@ -163,7 +154,9 @@ export class CasesService {
 
     await c.save();
 
-    const inviteUrl = `${this.config.get('APP_SERVER_URL')}/auth/accept-invite?token=${token}&caseId=${c._id}&email=${encodeURIComponent(inviteEmail)}`;
+    const inviteUrl = `${this.config.get('APP_SERVER_URL')}/auth/accept-invite?token=${token}&caseId=${c._id}&email=${encodeURIComponent(
+      inviteEmail,
+    )}`;
     await this.mailService.sendInvite(inviteEmail, inviteUrl);
 
     return { inviteUrl };
@@ -173,20 +166,6 @@ export class CasesService {
   // Steps: update & locking
   // -----------------------
 
-  /**
-   * Update a specific step on case.
-   *
-   * NEW LOCKING RULES:
-   * - Steps 1-6: no automatic locking on submission — users can re-submit/update.
-   * - When step 7 is submitted, the CASE becomes fully locked: all steps' status.*.locked = true,
-   *   status.*.lockedBy = actorId, lockedAt = now, and case.fullyLocked metadata is set.
-   *
-   * IMPORTANT CHANGE: pre-questionnaire objects are NOT locked automatically on step7 submission.
-   * Pre-questionnaire submission and lawyer selection are allowed only after all steps are submitted
-   * and the case is fully locked (these checks are enforced where appropriate).
-   *
-   * controller should already guard who may call updateStep (privileged vs end-user).
-   */
   async updateStep(
     caseId: string,
     stepNumber: number,
@@ -202,25 +181,54 @@ export class CasesService {
       throw new BadRequestException('Invalid step');
     }
 
-    // If case is fully locked, deny any update.
     if (c.fullyLocked) {
-      throw new ForbiddenException(
-        'Case is fully locked and cannot be modified',
-      );
+      throw new ForbiddenException('Case is fully locked and cannot be modified');
     }
 
     const key = `step${stepNumber}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-    // write the actual step payload (StepXDetails) onto the case doc
     (c as any)[key] = data;
 
-    // ensure a StepStatus exists for this step, and mark submitted metadata
     const stepStatus = this.ensureStepStatusObj(c, key);
     stepStatus.submitted = true;
     stepStatus.submittedBy = new Types.ObjectId(actorId);
     stepStatus.submittedAt = new Date();
 
-    // When step 7 is submitted we lock the entire case (full lock) — lock only steps 1..7
     if (stepNumber === 7) {
+      const requiredUser1 = [1, 2, 5, 6, 7];
+      const requiredUser2 = [3, 4];
+
+      const statusAny = c.status || {};
+
+      const isSubmitted = (n: number) =>
+        Boolean(statusAny[`step${n}`] && statusAny[`step${n}`].submitted);
+
+      const missingUser1 = requiredUser1.filter((n) => !isSubmitted(n));
+      const missingUser2 = requiredUser2.filter((n) => !isSubmitted(n));
+
+      if (!c.invitedUser) {
+        throw new BadRequestException(
+          'Cannot submit step 7: invited user not attached to case.',
+        );
+      }
+
+      if (missingUser1.length || missingUser2.length) {
+        const parts: string[] = [];
+
+        if (missingUser1.length) {
+          parts.push(`owner missing steps: ${missingUser1.join(', ')}`);
+        }
+
+        if (missingUser2.length) {
+          parts.push(`invited user missing steps: ${missingUser2.join(', ')}`);
+        }
+
+        throw new BadRequestException(
+          `Cannot submit step 7. Please ensure all required steps are saved before final submission. ${parts.join(
+            '; ',
+          )}`,
+        );
+      }
+
       c.fullyLocked = true;
       c.fullyLockedBy = new Types.ObjectId(actorId);
       c.fullyLockedAt = new Date();
@@ -232,22 +240,82 @@ export class CasesService {
         s.locked = true;
         s.lockedBy = new Types.ObjectId(actorId);
         s.lockedAt = now;
-        // unlockedBy/unlockedAt remain null until admin unlock
       }
-
-      // NOTE: per new requirement we do NOT lock preQuestionnaireUser1/2 here.
-      // Leave preQuestionnaire fields as-is; submission/selection will be gated by checks that
-      // require all steps submitted AND fullyLocked.
     }
 
     await c.save();
+
+    // Send the "first phase completed" notification only when the case is fully locked
+    // and all steps are submitted.
+    try {
+      if (c.fullyLocked && this.areAllStepsSubmitted(c)) {
+        // Prefer a dedicated mail helper if present
+        if (
+          this.mailService &&
+          typeof (this.mailService as any).sendFirstPhaseCompletedForCase === 'function'
+        ) {
+          await (this.mailService as any).sendFirstPhaseCompletedForCase(c);
+        } else {
+          // Fallback: best-effort inline send without case link and with the requested text
+          const recipients: string[] = [];
+          if ((c as any).owner && typeof (c as any).owner.email === 'string') {
+            recipients.push((c as any).owner.email);
+          }
+          if ((c as any).invitedUser && typeof (c as any).invitedUser.email === 'string') {
+            recipients.push((c as any).invitedUser.email);
+          } else if (c.invitedEmail) {
+            recipients.push(c.invitedEmail);
+          }
+          const uniqueRecipients = Array.from(new Set(recipients)).filter(Boolean) as string[];
+
+          const subject = `First phase completed — case ${c._id}`;
+          const bodyText = `Hello,
+
+The first phase of questionnaires has been submitted by both you and your partner for case ${c._id}.
+You have now moved to the pre-lawyer questionnaires and may proceed to select a lawyer.
+If you have questions, contact support.
+
+Regards,
+LetsPrenup Team
+`;
+          if (uniqueRecipients.length > 0 && typeof (this.mailService as any).sendMail === 'function') {
+            for (const to of uniqueRecipients) {
+              try {
+                await (this.mailService as any).sendMail(to, subject, bodyText);
+              } catch (err) {
+                // swallow to avoid failing updateStep; mail errors are best-effort
+                // but log if available
+                if (this.mailService && (this.mailService as any).logger) {
+                  try { (this.mailService as any).logger.error(`Fallback send failed to ${to}`, err); } catch (e) {}
+                }
+              }
+            }
+          } else {
+            // no recipients resolved or no sendMail - warn to logs if possible
+            if (this.mailService && (this.mailService as any).logger) {
+              try { (this.mailService as any).logger.warn(`First-phase: no recipients or mail helper for case ${c._id}`); } catch (e) {}
+            }
+          }
+        }
+      }
+    } catch (err) {
+      // Do not block the operation on email failures; log and continue.
+      try {
+        if (this.mailService && (this.mailService as any).logger) {
+          (this.mailService as any).logger.error('Failed to send first-phase notification for case', err);
+        } else {
+          console.error('Failed to send first-phase notification for case', c._id, err);
+        }
+      } catch (e) {
+        console.error('Failed to log email error', e);
+      }
+    }
+
     return c;
   }
 
   /**
-   * Unlock the case (privileged users). This method:
-   * - only allows unlocking when case is fullyLocked OR when step7 has been submitted.
-   * - clears fullyLocked metadata and clears per-step locked flags while setting unlocked audit.
+   * Unlock the case (privileged users).
    */
   async unlockCase(caseId: string, actorId: string): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId))
@@ -255,7 +323,6 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
-    // ensure status and step7 exist (with proper typed default)
     this.ensureStepStatusObj(c, 'step7');
 
     const step7Status = (c.status as any).step7 as StepStatus;
@@ -273,12 +340,10 @@ export class CasesService {
       : null;
     const now = new Date();
 
-    // clear full-lock metadata
     c.fullyLocked = false;
     c.fullyLockedBy = null;
     c.fullyLockedAt = null;
 
-    // clear all step locks and set unlockedBy/unlockedAt audit fields
     for (let i = 1; i <= 7; i++) {
       const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
       const s = this.ensureStepStatusObj(c, sk);
@@ -289,7 +354,6 @@ export class CasesService {
       s.unlockedAt = now;
     }
 
-    // Note: preQuestionnaire locks were not set by full-lock anymore, but keep safety clear
     if (c.preQuestionnaireUser1) {
       c.preQuestionnaireUser1.locked = false;
       c.preQuestionnaireUser1.lockedBy = null;
@@ -309,10 +373,6 @@ export class CasesService {
   // Pre-questionnaire
   // -----------------------
 
-  /**
-   * Update PreQuestionnaire fields directly (used by controller convenience)
-   * Expects dotted paths, e.g. { 'preQuestionnaireUser1.answers': [...], 'preQuestionnaireUser1.selectedLawyer': ObjectId(...) }
-   */
   async updatePreQuestionnaire(
     caseId: string,
     updatePatch: any,
@@ -322,14 +382,14 @@ export class CasesService {
     const updated = await this.caseModel
       .findByIdAndUpdate(caseId, { $set: updatePatch }, { new: true })
       .exec();
-    if (!updated) throw new NotFoundException('Case not found');
+    if (!updated) {
+      throw new NotFoundException('Case not found');
+    }
     return updated;
   }
 
   /**
-   * Submit the pre-questionnaire for the current actor (owner => user1, invitedUser => user2).
-   *
-   * NEW: pre-questionnaire submission is only allowed after all steps are submitted AND the case is fully locked.
+   * Submit the pre-questionnaire for the current actor and email status updates.
    */
   async submitPreQuestionnaire(
     caseId: string,
@@ -341,7 +401,6 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
-    // New rule: allow pre-questionnaire submission only after the case is fully locked AND all steps submitted.
     if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
       throw new BadRequestException(
         'Pre-questionnaire can only be submitted after all steps are submitted and the case is fully locked',
@@ -380,6 +439,47 @@ export class CasesService {
     }
 
     await c.save();
+
+    // --- Send Agreement status email for first step completion (best-effort) ---
+    try {
+      const actorEmail = this.resolveEmailForActor(c, actorObjId);
+      if (actorEmail) {
+        const requiredSteps = isOwner ? [1, 2, 5, 6, 7] : [3, 4];
+        const missing = requiredSteps.filter((n) => {
+          const s = (c.status as any)[`step${n}`];
+          return !(s && s.submitted);
+        });
+
+        const friendlyMissing = missing.map((n) => this.friendlyStepName(n));
+        const subject = `Agreement status: First step completed — case ${c._id}`;
+        const bodyText = `Hello,
+
+You have completed the pre-lawyer questionnaire for case ${c._id}.
+Completed: Pre-lawyer questionnaire (first step).
+Remaining required steps for you: ${friendlyMissing.length > 0 ? friendlyMissing.join(
+          ', ',
+        ) : 'None — you have completed your required steps.'}
+
+Please return to LetsPrenup to continue.
+
+Regards,
+LetsPrenup Team
+`;
+        if (typeof (this.mailService as any).sendMail === 'function') {
+          await (this.mailService as any).sendMail(actorEmail, subject, bodyText);
+        } else if (typeof this.mailService.sendAgreementSubmittedForCase === 'function') {
+          // fallback to generic helper if present
+          await (this.mailService as any).sendMail(actorEmail, subject, bodyText);
+        } else {
+          console.warn('Mail service has no sendMail helper; skipping pre-questionnaire email');
+        }
+      } else {
+        console.warn('Could not resolve actor email for pre-questionnaire notification for case', c._id);
+      }
+    } catch (err) {
+      console.error('Failed to send pre-questionnaire notification for case', c._id, err);
+    }
+
     return c;
   }
 
@@ -387,11 +487,17 @@ export class CasesService {
   // Lawyer selection
   // -----------------------
 
+  /**
+   * Select a lawyer for a case (actor picks lawyer). Also send the required intro emails (best-effort).
+   *
+   * Added parameter `message?: string` that will be forwarded to lawyer in intro email.
+   */
   async selectLawyer(
     caseId: string,
     actorId: string,
     lawyerId: string,
     force = false,
+    message?: string,
   ): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId))
       throw new BadRequestException('Invalid case id');
@@ -401,7 +507,6 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId).exec();
     if (!c) throw new NotFoundException('Case not found');
 
-    // New rule: lawyer selection is allowed *only* after the case is fully locked AND all steps are submitted.
     if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
       throw new BadRequestException(
         'Lawyer selection is allowed only after all steps are submitted and the case is fully locked',
@@ -431,8 +536,7 @@ export class CasesService {
 
     const equalsId = (idA: Types.ObjectId | null, idB: Types.ObjectId) => {
       if (!idA) return false;
-      if (typeof (idA as any).equals === 'function')
-        return (idA as any).equals(idB);
+      if (typeof (idA as any).equals === 'function') return (idA as any).equals(idB);
       return idA.toString() === idB.toString();
     };
 
@@ -443,13 +547,8 @@ export class CasesService {
       throw new ForbiddenException('Actor not part of this case');
     }
 
-    // ensure both parties have submitted
-    const p1Submitted = !!(
-      c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted
-    );
-    const p2Submitted = !!(
-      c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted
-    );
+    const p1Submitted = !!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted);
+    const p2Submitted = !!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted);
     if (!p1Submitted || !p2Submitted) {
       throw new BadRequestException(
         'Both parties must submit their pre-questionnaires before selecting lawyers',
@@ -486,8 +585,140 @@ export class CasesService {
     }
 
     await c.save();
+
+    // --- Send Agreement status email for second step completion (best-effort) ---
+    try {
+      const actorEmail = this.resolveEmailForActor(c, actorObjId);
+      if (actorEmail) {
+        // determine remaining required steps for actor
+        const requiredSteps = isOwner ? [1, 2, 5, 6, 7] : [3, 4];
+        const missing = requiredSteps.filter((n) => {
+          const s = (c.status as any)[`step${n}`];
+          return !(s && s.submitted);
+        });
+        const friendlyMissing = missing.map((n) => this.friendlyStepName(n));
+        const subject = `Agreement status: Second step completed — case ${c._id}`;
+        const bodyText = `Hello,
+
+You have selected a lawyer for case ${c._id}.
+Completed: Select lawyer (second step).
+Remaining required steps for you: ${friendlyMissing.length > 0 ? friendlyMissing.join(', ') : 'None — you have completed your required steps.'}
+
+Your selected lawyer:
+${(lawyerDoc as any).name ?? 'N/A'}${this.getLawyerContactEmail(lawyerDoc) ? `\nEmail: ${this.getLawyerContactEmail(lawyerDoc)}` : ''}
+
+Regards,
+LetsPrenup Team
+`;
+        if (typeof (this.mailService as any).sendMail === 'function') {
+          await (this.mailService as any).sendMail(actorEmail, subject, bodyText);
+        }
+      } else {
+        console.warn('Could not resolve actor email for lawyer-selection notification for case', c._id);
+      }
+    } catch (err) {
+      console.error('Failed to send lawyer-selection notification for case', c._id, err);
+    }
+
+    // --- Send Lawyer Introduction Email to client (actor) (best-effort) ---
+    try {
+      const actorEmail = this.resolveEmailForActor(c, actorObjId);
+      if (actorEmail) {
+        const subject = `Lawyer introduction — ${(lawyerDoc as any).name ?? ''} (LetsPrenup)`;
+        const bodyText = `Hello,
+
+Thanks for choosing a lawyer via LetsPrenup.
+
+Lawyer: ${(lawyerDoc as any).name ?? 'N/A'}
+${this.getLawyerContactEmail(lawyerDoc) ? `Email: ${this.getLawyerContactEmail(lawyerDoc)}\n` : ''}
+${this.getLawyerContactPhone(lawyerDoc) ? `Phone: ${this.getLawyerContactPhone(lawyerDoc)}\n` : ''}
+You can expect an outreach from your lawyer shortly.
+
+Regards,
+LetsPrenup Team
+`;
+        if (typeof (this.mailService as any).sendMail === 'function') {
+          await (this.mailService as any).sendMail(actorEmail, subject, bodyText);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to send lawyer-intro-to-client for case', c._id, err);
+    }
+
+    // --- Send Client Introduction Email to the Lawyer (best-effort) ---
+    try {
+      const lawyerEmail = this.getLawyerContactEmail(lawyerDoc);
+      if (lawyerEmail) {
+        const clientInfo = isOwner
+          ? {
+            role: 'Owner (P1)',
+            email: (c as any).owner?.email ?? 'N/A',
+          }
+          : {
+            role: 'Invited user (P2)',
+            email: c.invitedEmail ?? (c as any).invitedUser?.email ?? 'N/A',
+          };
+
+        const appUrl = this.config.get('APP_SERVER_URL') || '';
+        const loginUrl = `${appUrl}/auth/login`;
+
+        const subject = `Client introduction — new client via LetsPrenup (case ${c._id})`;
+        const bodyText = `Hello ${(lawyerDoc as any).name ?? ''},
+
+You have been selected as the lawyer for a client via LetsPrenup.
+
+Case: ${c._id}
+Client role: ${clientInfo.role}
+Client email: ${clientInfo.email}
+
+Client message (if any):
+${message || '(no message provided)'}
+
+Please login to LetsPrenup to view the case and begin the process:
+${loginUrl}
+
+Regards,
+LetsPrenup Team
+`;
+        if (typeof (this.mailService as any).sendMail === 'function') {
+          await (this.mailService as any).sendMail(lawyerEmail, subject, bodyText);
+        } else if (typeof (this.mailService as any).sendLawyerIntro === 'function') {
+          await (this.mailService as any).sendLawyerIntro(lawyerEmail, c, message);
+        } else {
+          console.warn('Mail service has no sendMail helper; skipping lawyer intro email');
+        }
+      } else {
+        console.warn('Could not resolve lawyer email for lawyer intro for case', c._id);
+      }
+    } catch (err) {
+      console.error('Failed to send client-intro email to lawyer for case', c._id, err);
+    }
+
     return c;
   }
+
+  /**
+   * Helper: prefer directEmail over publicEmail.
+   */
+  private getLawyerContactEmail(lawyerDoc: LawyerDocument | any): string | null {
+    try {
+      return (lawyerDoc as any).directEmail ?? (lawyerDoc as any).publicEmail ?? null;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Helper: prefer directPhone over publicPhone.
+   */
+  private getLawyerContactPhone(lawyerDoc: LawyerDocument | any): string | null {
+    try {
+      return (lawyerDoc as any).directPhone ?? (lawyerDoc as any).publicPhone ?? null;
+    } catch (err) {
+      return null;
+    }
+  }
+
 
   async isLawyerSelected(caseId: string, lawyerId: string): Promise<boolean> {
     const c = await this.caseModel
@@ -505,12 +736,7 @@ export class CasesService {
 
   async listLawyers(limit = 50, page = 1) {
     const skip = (page - 1) * limit;
-    const docs = await this.lawyerModel
-      .find()
-      .skip(skip)
-      .limit(limit)
-      .lean()
-      .exec();
+    const docs = await this.lawyerModel.find().skip(skip).limit(limit).lean().exec();
     const total = await this.lawyerModel.countDocuments().exec();
     return { total, docs };
   }
@@ -524,11 +750,7 @@ export class CasesService {
     }
 
     return this.caseModel
-      .findByIdAndUpdate(
-        caseId,
-        { inviteCredentials: creds },
-        { new: true, useFindAndModify: false },
-      )
+      .findByIdAndUpdate(caseId, { inviteCredentials: creds }, { new: true, useFindAndModify: false })
       .exec();
   }
 
@@ -541,14 +763,11 @@ export class CasesService {
       caseId,
       {
         $set: {
-          // reset partner steps data (if required)
           step3: {},
           step4: {},
-
           'status.step3.submitted': false,
           'status.step3.submittedBy': null,
           'status.step3.submittedAt': null,
-
           'status.step4.submitted': false,
           'status.step4.submittedBy': null,
           'status.step4.submittedAt': null,
@@ -567,11 +786,11 @@ export class CasesService {
     return (c as any).approval as Approval;
   }
 
+  // -----------------------
+  // Approvals (unchanged)
+  // -----------------------
 
-  async approveCaseByUser(
-    caseId: string,
-    actorId: string,
-  ): Promise<CaseDocument> {
+  async approveCaseByUser(caseId: string, actorId: string): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
     }
@@ -579,11 +798,8 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
-    // Must be fully locked & both pre-questionnaires submitted
     if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
-      throw new BadRequestException(
-        'Case must be fully locked and completed before approval',
-      );
+      throw new BadRequestException('Case must be fully locked and completed before approval');
     }
 
     const actorObjId = new Types.ObjectId(actorId);
@@ -597,7 +813,6 @@ export class CasesService {
 
     const now = new Date();
 
-    // ensure approval object exists
     const approval = this.ensureApprovalObj(c);
 
     if (isOwner) {
@@ -612,11 +827,7 @@ export class CasesService {
     return c;
   }
 
-
-  async approveCaseByLawyer(
-    caseId: string,
-    lawyerId: string,
-  ): Promise<CaseDocument> {
+  async approveCaseByLawyer(caseId: string, lawyerId: string): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId) || !Types.ObjectId.isValid(lawyerId)) {
       throw new BadRequestException('Invalid ids');
     }
@@ -624,7 +835,6 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
-    // Ensure lawyer was selected
     const selected =
       c.preQuestionnaireUser1?.selectedLawyer?.toString() === lawyerId ||
       c.preQuestionnaireUser2?.selectedLawyer?.toString() === lawyerId;
@@ -633,7 +843,6 @@ export class CasesService {
       throw new ForbiddenException('Lawyer not selected for this case');
     }
 
-    // ensure approval object exists
     const approval = this.ensureApprovalObj(c);
 
     approval.lawyerApproved = true;
@@ -644,11 +853,7 @@ export class CasesService {
     return c;
   }
 
-
-  async approveCaseByManager(
-    caseId: string,
-    actorId: string,
-  ): Promise<CaseDocument> {
+  async approveCaseByManager(caseId: string, actorId: string): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
     }
@@ -656,7 +861,6 @@ export class CasesService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
-    // ensure approval object exists
     const approval = this.ensureApprovalObj(c);
 
     approval.caseManagerApproved = true;
@@ -666,4 +870,66 @@ export class CasesService {
     return c;
   }
 
+  // -----------------------
+  // Helper functions (email resolving, friendly names)
+  // -----------------------
+
+  /**
+   * Try to resolve an email address for an actor (owner or invited) using best-effort
+   * (case doc might have populated owner/invitedUser objects or invite email)
+   */
+  private resolveEmailForActor(c: CaseDocument, actorObjId: Types.ObjectId | null): string | null {
+    try {
+      if (!actorObjId) return null;
+      // owner
+      if (c.owner && typeof (c.owner as any).toString === 'function') {
+        if ((c.owner as any).toString() === actorObjId.toString()) {
+          if ((c as any).owner && typeof (c as any).owner.email === 'string') {
+            return (c as any).owner.email;
+          }
+        }
+      }
+      // invited user
+      if (c.invitedUser && typeof (c.invitedUser as any).toString === 'function') {
+        if ((c.invitedUser as any).toString() === actorObjId.toString()) {
+          if ((c as any).invitedUser && typeof (c as any).invitedUser.email === 'string') {
+            return (c as any).invitedUser.email;
+          }
+          if (c.invitedEmail) return c.invitedEmail;
+        }
+      }
+      // fallback: if invitedEmail exists and actor matches invitedId
+      if (c.invitedEmail) {
+        if (c.invitedUser == null) {
+          // maybe actor is external invited person; return invitedEmail
+          return c.invitedEmail;
+        }
+      }
+      return null;
+    } catch (err) {
+      console.warn('resolveEmailForActor error', err);
+      return null;
+    }
+  }
+
+  private friendlyStepName(stepNumber: number): string {
+    switch (stepNumber) {
+      case 1:
+        return 'Personal details (step 1)';
+      case 2:
+        return 'Select lawyer (step 2)';
+      case 3:
+        return 'Partner personal details (step 3)';
+      case 4:
+        return 'Partner finances (step 4)';
+      case 5:
+        return 'Joint assets (step 5)';
+      case 6:
+        return 'Future assets (step 6)';
+      case 7:
+        return 'Finalise & submit (step 7)';
+      default:
+        return `Step ${stepNumber}`;
+    }
+  }
 }

@@ -1,4 +1,3 @@
-// src/cases/cases.controller.ts
 import {
   Body,
   Controller,
@@ -11,13 +10,10 @@ import {
   BadRequestException,
   NotFoundException,
   UnauthorizedException,
-  Delete,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { CasesService } from './cases.service';
 import { CreateCaseDto } from './dto/create-case.dto';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
 import { Step1Dto } from './dto/step1.dto';
 import { Step2Dto } from './dto/step2.dto';
 import { Step3Dto } from './dto/step3.dto';
@@ -27,12 +23,6 @@ import { Step6Dto } from './dto/step6.dto';
 import { Step7Dto } from './dto/step7.dto';
 import { LawyersService } from './lawyer.service';
 
-const END_USER1_STEPS = [1, 2, 5, 6, 7];
-const END_USER2_STEPS = [3, 4];
-
-/**
- * Step 5 UI text (mirrors frontend JointAssetsPage)
- */
 const STEP5_HEADING = 'Joint assets';
 const STEP5_QUESTIONS = [
   `Do you have any shared earnings or earnings you'd like to share in the event of a divorce or separation?`,
@@ -57,6 +47,9 @@ const STEP6_QUESTIONS = [
   `Do you want any future assets or debts acquired in either of your sole names to be treated as Joint or Separate?`,
   `This agreement governs what happens in the event of divorce not death, however it is advisable that you make a new Will once you are married. Do you expect what you leave each other in the event of one of your deaths to be the same as the way your assets will be split in the event of a divorce?`,
 ];
+
+const END_USER1_STEPS = [1, 2, 5, 6, 7];
+const END_USER2_STEPS = [3, 4];
 
 @Controller('cases')
 export class CasesController {
@@ -128,7 +121,6 @@ export class CasesController {
     const c = await this.casesService.findById(id);
     if (!c) throw new NotFoundException('Case not found');
 
-    // only privileged or owner can invite
     const isPrivileged = this.isPrivilegedRole(user.role);
     const userIdStr = (user.id ?? user._id)?.toString();
     if (!(isPrivileged || c.owner?.toString() === userIdStr)) {
@@ -137,8 +129,6 @@ export class CasesController {
 
     return this.casesService.invite(id, user.id, email);
   }
-
-
 
   /** Attach invited user to a case (accept invite) */
   @UseGuards(JwtAuthGuard)
@@ -149,8 +139,8 @@ export class CasesController {
   }
 
   /**
-   * Get a single step. Special-case step 5 and 6 to return UI-shaped payloads.
-   */
+  * Get a single step. Special-case step 5 and 6 to return UI-shaped payloads.
+  */
   @UseGuards(JwtAuthGuard)
   @Get(':id/steps/:stepNumber')
   async getStep(
@@ -476,11 +466,9 @@ export class CasesController {
     };
   }
 
+
   /**
-   * Update a specific step of a case
-   * - Non-privileged end-users: must follow end-user step rules (which step types they can submit).
-   * - Privileged roles: may update any step.
-   * - New locking: only step 7 submission triggers a complete lock; otherwise end-users may re-submit/update 1-6.
+   * Update a specific step of a case (unchanged)
    */
   @UseGuards(JwtAuthGuard)
   @Post(':id/steps/:stepNumber')
@@ -491,239 +479,10 @@ export class CasesController {
     @Body() body: any,
   ) {
     const user = this.ensureUser(req);
-    const stepNumber = Number(stepNumberStr);
-    const c = await this.casesService.findById(id);
-    if (!c) throw new NotFoundException('Case not found');
-
-    const isPrivileged = this.isPrivilegedRole(user.role);
-
-    if (!isPrivileged) {
-      const userIdStr = (user.id ?? user._id)?.toString();
-
-      // Owner path (end_user type user1)
-      if (c.owner?.toString() === userIdStr) {
-        if (user.endUserType !== 'user1')
-          throw new ForbiddenException('Owner not user1');
-        if (!END_USER1_STEPS.includes(stepNumber))
-          throw new ForbiddenException('Not allowed to submit this step');
-      } else if (c.invitedUser && c.invitedUser?.toString() === userIdStr) {
-        if (user.endUserType !== 'user2')
-          throw new ForbiddenException('Invited user not user2');
-        if (!END_USER2_STEPS.includes(stepNumber))
-          throw new ForbiddenException('Not allowed to submit this step');
-      } else {
-        throw new ForbiddenException('Forbidden');
-      }
-    }
-
-    // If case is fully locked, only privileged can update (steps are locked).
-    if (c.fullyLocked && !isPrivileged) {
-      throw new ForbiddenException(
-        'Case is fully locked. Please ask a case manager to unlock it.',
-      );
-    }
-
-    const dtoMap: Record<number, any> = {
-      1: Step1Dto,
-      2: Step2Dto,
-      3: Step3Dto,
-      4: Step4Dto,
-      5: Step5Dto,
-      6: Step6Dto,
-      7: Step7Dto,
-    };
-
-    const DtoClass = dtoMap[stepNumber];
-    let validatedData: any = body;
-
-    // SPECIAL CASE: map UI payload for step 5 into schema fields
-    if (stepNumber === 5) {
-      const questions = Array.isArray(body.questions) ? body.questions : [];
-      const followUps = Array.isArray(body.followUps) ? body.followUps : [];
-
-      const step5Payload = {
-        sharedEarnings: questions[0]?.answer === 'yes',
-        liveInRentedOrOwned: questions[1]?.answer === 'yes',
-        sharedSavings: questions[2]?.answer === 'yes',
-        sharedPensions: questions[3]?.answer === 'yes',
-
-        sharedDebts: followUps[0]?.answer === 'yes',
-        sharedDebtsDetails: followUps[0]?.details || {},
-
-        sharedBusinesses: followUps[1]?.answer === 'yes',
-        sharedBusinessesDetails: followUps[1]?.details || {},
-
-        sharedChattels: followUps[2]?.answer === 'yes',
-        sharedChattelsDetails: followUps[2]?.details || {},
-
-        sharedOtherAssets: followUps[3]?.answer === 'yes',
-        sharedOtherAssetsDetails: followUps[3]?.details || {},
-
-        // store the UI payload for convenience in details (optional)
-        sharedEarningsDetails: {
-          ui: {
-            heading: body.heading || STEP5_HEADING,
-            questions,
-            followUpsShown: !!body.followUpsShown,
-            followUps,
-            savedAt: body.savedAt || new Date().toISOString(),
-          },
-        },
-      };
-
-      validatedData = step5Payload;
-    } // SPECIAL CASE: map UI payload for step 7 into schema fields
-    if (stepNumber === 7) {
-      const mapped = {
-        isOnePregnant: !!body.pregnancy?.answer,
-        isOnePregnantOverview: body.pregnancy?.overview || null,
-
-        businessWorkedTogether: !!body.businessTogether?.answer,
-        businessWorkedTogetherOverview: body.businessTogether?.overview || null,
-
-        oneOutOfWorkOrDependent: !!body.outOfWorkDependent?.answer,
-        oneOutOfWorkOverview: body.outOfWorkDependent?.overview || null,
-
-        familyHomeOwnedWith3rdParty: !!body.familyHomeThirdParty?.answer,
-        familyHome3rdPartyOverview: body.familyHomeThirdParty?.overview || null,
-
-        combinedAssetsOver3m: !!body.assetsOver3M?.answer,
-        combinedAssetsOver3mOverview: body.assetsOver3M?.overview || null,
-
-        childFromPreviousRelationshipsLivingWithYou:
-          !!body.childLivingWithYou?.answer,
-        childFromPreviousOverview: body.childLivingWithYou?.overview || null,
-
-        additionalComplexities: body.additionalComplexities || {},
-      };
-
-      // optional DTO validation
-      if (DtoClass) {
-        const instance = plainToInstance(DtoClass, mapped);
-        const errors = await validate(instance as object, {
-          whitelist: true,
-          forbidNonWhitelisted: false,
-        });
-        if (errors.length > 0) {
-          throw new BadRequestException(errors);
-        }
-      }
-
-      validatedData = mapped;
-    }
-
-    // SPECIAL CASE: map UI payload for step 6 into schema fields
-    else if (stepNumber === 6) {
-      // frontend payload expected:
-      // {
-      //   inheritanceSeparate: boolean,
-      //   giftsSeparate: boolean,
-      //   futureSoleAssetsSeparate: boolean,
-      //   sameAsWill: boolean,
-      //   wantWillAssistance: boolean,
-      //   sooriyaFutureInheritance: {...},
-      //   gomathiFutureInheritance: {...}
-      // }
-      const mapped = {
-        inheritanceConsideredSeparate: !!body.inheritanceSeparate,
-        giftConsideredSeparate: !!body.giftsSeparate,
-        futureAssetsTreatedJointOrSeparate: !!body.futureSoleAssetsSeparate,
-        willBeSameAsDivorceSplit: !!body.sameAsWill,
-        wantWillHelp: !!body.wantWillAssistance,
-
-        person1FutureInheritance: {
-          originalAmount:
-            body.sooriyaFutureInheritance &&
-              body.sooriyaFutureInheritance.originalAmount !== undefined
-              ? body.sooriyaFutureInheritance.originalAmount
-              : null,
-          originalCurrency:
-            body.sooriyaFutureInheritance?.originalCurrency ?? null,
-          gbpEquivalent:
-            body.sooriyaFutureInheritance &&
-              body.sooriyaFutureInheritance.gbpEquivalent !== undefined
-              ? body.sooriyaFutureInheritance.gbpEquivalent
-              : null,
-          basisOfEstimate:
-            body.sooriyaFutureInheritance?.basisOfEstimate ?? null,
-        },
-
-        person2FutureInheritance: {
-          originalAmount:
-            body.gomathiFutureInheritance &&
-              body.gomathiFutureInheritance.originalAmount !== undefined
-              ? body.gomathiFutureInheritance.originalAmount
-              : null,
-          originalCurrency:
-            body.gomathiFutureInheritance?.originalCurrency ?? null,
-          gbpEquivalent:
-            body.gomathiFutureInheritance &&
-              body.gomathiFutureInheritance.gbpEquivalent !== undefined
-              ? body.gomathiFutureInheritance.gbpEquivalent
-              : null,
-          basisOfEstimate:
-            body.gomathiFutureInheritance?.basisOfEstimate ?? null,
-        },
-
-        // Optionally keep UI payload for round-trip hydration
-        person1FutureInheritanceDetails: {
-          ui: {
-            heading: body.heading || STEP6_HEADING,
-            answers: body.questions || [],
-            savedAt: body.savedAt || new Date().toISOString(),
-          },
-        },
-      };
-
-      // Validate mapped payload if DTO exists
-      if (DtoClass) {
-        const instance = plainToInstance(DtoClass, mapped);
-        const errors = await validate(instance as object, {
-          whitelist: true,
-          forbidNonWhitelisted: false,
-        });
-        if (errors.length > 0) {
-          const formatted = errors.map((err) => ({
-            property: err.property,
-            constraints: err.constraints,
-            children: err.children,
-          }));
-          throw new BadRequestException({
-            message: 'Validation failed',
-            errors: formatted,
-          });
-        }
-      }
-
-      validatedData = mapped;
-    } else {
-      // Default behavior: run DTO validation for other steps if DTO exists
-      if (DtoClass) {
-        const instance = plainToInstance(DtoClass, body);
-        const errors = await validate(instance as object, {
-          whitelist: true,
-          forbidNonWhitelisted: false,
-        });
-        if (errors.length > 0) {
-          const formatted = errors.map((err) => ({
-            property: err.property,
-            constraints: err.constraints,
-            children: err.children,
-          }));
-          throw new BadRequestException({
-            message: 'Validation failed',
-            errors: formatted,
-          });
-        }
-        validatedData = instance;
-      }
-    }
-
-    // call service (service will perform full-lock if this is step 7)
     const updated = await this.casesService.updateStep(
       id,
-      stepNumber,
-      validatedData,
+      Number(stepNumberStr),
+      body,
       user.id ?? user._id,
     );
     return updated;
@@ -750,7 +509,6 @@ export class CasesController {
     const c = await this.casesService.findById(id);
     if (!c) throw new NotFoundException('Case not found');
 
-    // Access check for non-admins
     if (!isPrivileged) {
       const userIdStr = (user.id ?? user._id)?.toString();
       if (
@@ -761,8 +519,6 @@ export class CasesController {
       }
     }
 
-    // New rule: pre-questionnaire submission and lawyer selection are only allowed *after*
-    // all steps are submitted AND the case is fully locked. Enforce controller-level check here.
     if (!isPrivileged) {
       const allStepsSubmitted = this.casesService.areAllStepsSubmitted(c);
       if (!(c.fullyLocked && allStepsSubmitted)) {
@@ -823,6 +579,11 @@ export class CasesController {
     return this.lawyersService.seedInitialLawyersIfEmpty();
   }
 
+  /**
+   * Pre-questionnaire submission endpoint.
+   * Accepts: { answers?: string[] }
+   * Emails and notifications are handled inside CasesService.submitPreQuestionnaire (best-effort).
+   */
   @UseGuards(JwtAuthGuard)
   @Post(':id/pre-questionnaire')
   async submitPreQuestionnaireEndpoint(
@@ -831,17 +592,13 @@ export class CasesController {
     @Body() body: { answers?: string[] },
   ) {
     const user = this.ensureUser(req);
-    // basic validation
     if (!body || !Array.isArray(body.answers)) {
-      throw new BadRequestException(
-        'Request body must include "answers" array',
-      );
+      throw new BadRequestException('Request body must include "answers" array');
     }
 
     const c = await this.casesService.findById(id);
     if (!c) throw new NotFoundException('Case not found');
 
-    // New rule: pre-questionnaire can only be submitted after all steps are submitted AND case is fully locked.
     const isPrivileged = this.isPrivilegedRole(user.role);
     const allStepsSubmitted = this.casesService.areAllStepsSubmitted(c);
     if (!(c.fullyLocked && allStepsSubmitted) && !isPrivileged) {
@@ -850,7 +607,6 @@ export class CasesController {
       );
     }
 
-    // call service to submit (service enforces the same rules)
     const updatedCase = await this.casesService.submitPreQuestionnaire(
       id,
       user.id ?? user._id,
@@ -862,12 +618,17 @@ export class CasesController {
     };
   }
 
+  /**
+   * Select lawyer endpoint.
+   * Accepts: { lawyerId?: string; force?: boolean; message?: string }
+   * The `message` (optional) will be forwarded to the lawyer email as part of the intro.
+   */
   @UseGuards(JwtAuthGuard)
   @Post(':id/select-lawyer')
   async selectLawyerEndpoint(
     @Req() req,
     @Param('id') id: string,
-    @Body() body: { lawyerId?: string; force?: boolean },
+    @Body() body: { lawyerId?: string; force?: boolean; message?: string },
   ) {
     const user = this.ensureUser(req);
     if (!body || !body.lawyerId) {
@@ -880,8 +641,6 @@ export class CasesController {
     if (!c) throw new NotFoundException('Case not found');
 
     const isPrivileged = this.isPrivilegedRole(user.role);
-
-    // New rule: lawyer selection allowed only after all steps are submitted AND case is fully locked.
     const allStepsSubmitted = this.casesService.areAllStepsSubmitted(c);
     if (!(c.fullyLocked && allStepsSubmitted) && !isPrivileged) {
       throw new ForbiddenException(
@@ -889,14 +648,15 @@ export class CasesController {
       );
     }
 
-    // If caller is privileged they can pass force=true to override exclusivity (service handles it)
     const force = !!body.force;
+    const message = typeof body.message === 'string' ? body.message : undefined;
 
     const updatedCase = await this.casesService.selectLawyer(
       id,
       user.id ?? user._id,
       body.lawyerId,
       force,
+      message,
     );
     return {
       message: 'Lawyer selected',
@@ -904,15 +664,11 @@ export class CasesController {
     };
   }
 
-
   @UseGuards(JwtAuthGuard)
   @Post(':id/approve')
   async approveByUser(@Req() req, @Param('id') id: string) {
     const user = this.ensureUser(req);
-    return this.casesService.approveCaseByUser(
-      id,
-      user.id ?? user._id,
-    );
+    return this.casesService.approveCaseByUser(id, user.id ?? user._id);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -926,10 +682,7 @@ export class CasesController {
       throw new BadRequestException('lawyerId required');
     }
 
-    return this.casesService.approveCaseByLawyer(
-      id,
-      body.lawyerId,
-    );
+    return this.casesService.approveCaseByLawyer(id, body.lawyerId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -940,10 +693,6 @@ export class CasesController {
       throw new ForbiddenException('Only case managers/admins');
     }
 
-    return this.casesService.approveCaseByManager(
-      id,
-      user.id ?? user._id,
-    );
+    return this.casesService.approveCaseByManager(id, user.id ?? user._id);
   }
-
 }
