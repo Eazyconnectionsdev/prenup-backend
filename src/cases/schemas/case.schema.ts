@@ -30,11 +30,11 @@ export class Approval {
 
   @Prop({ type: Date, default: null })
   caseManagerApprovedAt?: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  approvedBy?: Types.ObjectId | null;
 }
 export const ApprovalSchema = SchemaFactory.createForClass(Approval);
-/**
- * Sub-schemas for repeated entries in Step 2 / 4 (financial items)
- */
 
 @Schema({ _id: false })
 export class IncomeEntry {
@@ -110,13 +110,8 @@ export class OtherAssetEntry {
 }
 export const OtherAssetEntrySchema = SchemaFactory.createForClass(OtherAssetEntry);
 
-/**
- * Step-specific schemas
- */
-
 @Schema({ _id: false })
 export class Step1Details {
-  // About you
   @Prop({ type: String }) firstName?: string;
   @Prop({ type: String }) middleNames?: string;
   @Prop({ type: String }) lastName?: string;
@@ -131,7 +126,6 @@ export class Step1Details {
   @Prop({ type: Number }) incomeGBP?: number;
   @Prop({ type: String }) overviewAim?: string;
   @Prop({ type: String }) currentLivingSituation?: string;
-  // Confirmations (checkboxes)
   @Prop({ type: Boolean, default: false }) confirm_wenup_platform_used?: boolean;
   @Prop({ type: Boolean, default: false }) property_personal_possessions_remain?: boolean;
   @Prop({ type: Boolean, default: false }) family_home_divided_equally?: boolean;
@@ -144,73 +138,49 @@ export const Step1DetailsSchema = SchemaFactory.createForClass(Step1Details);
 export class Step2Details {
   @Prop({ type: Boolean, default: false }) separateEarnings?: boolean;
   @Prop({ type: [IncomeEntrySchema], default: [] }) earningsEntries?: IncomeEntry[];
-
   @Prop({ type: Boolean, default: false }) separateProperties?: boolean;
   @Prop({ type: [PropertyEntrySchema], default: [] }) propertyEntries?: PropertyEntry[];
-
   @Prop({ type: Boolean, default: false }) separateSavings?: boolean;
   @Prop({ type: [SavingEntrySchema], default: [] }) savingsEntries?: SavingEntry[];
-
   @Prop({ type: Boolean, default: false }) separatePensions?: boolean;
   @Prop({ type: [PensionEntrySchema], default: [] }) pensionEntries?: PensionEntry[];
-
   @Prop({ type: Boolean, default: false }) separateDebts?: boolean;
   @Prop({ type: [DebtEntrySchema], default: [] }) debtEntries?: DebtEntry[];
-
   @Prop({ type: Boolean, default: false }) separateBusinesses?: boolean;
   @Prop({ type: [BusinessEntrySchema], default: [] }) businessEntries?: BusinessEntry[];
-
   @Prop({ type: Boolean, default: false }) separateChattels?: boolean;
   @Prop({ type: [ChattelEntrySchema], default: [] }) chattelEntries?: ChattelEntry[];
-
   @Prop({ type: Boolean, default: false }) separateOtherAssets?: boolean;
   @Prop({ type: [OtherAssetEntrySchema], default: [] }) otherAssetEntries?: OtherAssetEntry[];
 }
 export const Step2DetailsSchema = SchemaFactory.createForClass(Step2Details);
 
-/**
- * Step 3 & 4 mirror Step 1 & 2 but for the partner.
- */
 @Schema({ _id: false })
-export class Step3Details extends Step1Details { }
+export class Step3Details extends Step1Details {}
 export const Step3DetailsSchema = SchemaFactory.createForClass(Step3Details);
 
 @Schema({ _id: false })
-export class Step4Details extends Step2Details { }
+export class Step4Details extends Step2Details {}
 export const Step4DetailsSchema = SchemaFactory.createForClass(Step4Details);
 
-/**
- * Step 5 - Joint Assets
- *
- * NOTE: the "Details" fields are generic Objects so we can persist UI payload
- * (for round-trip / rehydration) and/or store structured info where needed.
- */
 @Schema({ _id: false })
 export class Step5Details {
   @Prop({ type: Boolean, default: false }) sharedEarnings?: boolean;
   @Prop({ type: Object, default: {} }) sharedEarningsDetails?: any;
-
   @Prop({ type: Boolean, default: false }) sharedDebts?: boolean;
   @Prop({ type: Object, default: {} }) sharedDebtsDetails?: any;
-
   @Prop({ type: Boolean, default: false }) sharedBusinesses?: boolean;
   @Prop({ type: Object, default: {} }) sharedBusinessesDetails?: any;
-
   @Prop({ type: Boolean, default: false }) sharedChattels?: boolean;
   @Prop({ type: Object, default: {} }) sharedChattelsDetails?: any;
-
   @Prop({ type: Boolean, default: false }) sharedOtherAssets?: boolean;
   @Prop({ type: Object, default: {} }) sharedOtherAssetsDetails?: any;
-
   @Prop({ type: Boolean, default: false }) liveInRentedOrOwned?: boolean;
   @Prop({ type: Boolean, default: false }) sharedSavings?: boolean;
   @Prop({ type: Boolean, default: false }) sharedPensions?: boolean;
 }
 export const Step5DetailsSchema = SchemaFactory.createForClass(Step5Details);
 
-/**
- * Step 6 - Future Assets, Inheritance & Gifts
- */
 @Schema({ _id: false })
 export class FutureInheritance {
   @Prop({ type: Number }) originalAmount?: number;
@@ -227,195 +197,83 @@ export class Step6Details {
   @Prop({ type: Boolean, default: false }) futureAssetsTreatedJointOrSeparate?: boolean;
   @Prop({ type: Boolean, default: false }) willBeSameAsDivorceSplit?: boolean;
   @Prop({ type: Boolean, default: false }) wantWillHelp?: boolean;
-
   @Prop({ type: FutureInheritanceSchema, default: {} }) person1FutureInheritance?: FutureInheritance;
   @Prop({ type: FutureInheritanceSchema, default: {} }) person2FutureInheritance?: FutureInheritance;
 }
 export const Step6DetailsSchema = SchemaFactory.createForClass(Step6Details);
 
-/**
- * Step 7 - Areas of Complexity (yes/no + overview follow-ups)
- */
 @Schema({ _id: false })
 export class Step7Details {
   @Prop({ type: Boolean, default: false }) isOnePregnant?: boolean;
   @Prop({ type: String }) isOnePregnantOverview?: string;
-
   @Prop({ type: Boolean, default: false }) businessWorkedTogether?: boolean;
   @Prop({ type: String }) businessWorkedTogetherOverview?: string;
-
   @Prop({ type: Boolean, default: false }) oneOutOfWorkOrDependent?: boolean;
   @Prop({ type: String }) oneOutOfWorkOverview?: string;
-
   @Prop({ type: Boolean, default: false }) familyHomeOwnedWith3rdParty?: boolean;
   @Prop({ type: String }) familyHome3rdPartyOverview?: string;
-
   @Prop({ type: Boolean, default: false }) combinedAssetsOver3m?: boolean;
   @Prop({ type: String }) combinedAssetsOver3mOverview?: string;
-
   @Prop({ type: Boolean, default: false }) childFromPreviousRelationshipsLivingWithYou?: boolean;
   @Prop({ type: String }) childFromPreviousOverview?: string;
-
   @Prop({ type: Object, default: {} }) additionalComplexities?: any;
 }
 export const Step7DetailsSchema = SchemaFactory.createForClass(Step7Details);
 
-/**
- * Step status subdocument (includes lock metadata)
- */
 @Schema({ _id: false })
 export class StepStatus {
   @Prop({ type: Boolean, default: false }) submitted: boolean;
-
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  submittedBy: Types.ObjectId | null;
-
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) submittedBy: Types.ObjectId | null;
   @Prop({ type: Date, default: null }) submittedAt: Date | null;
-
-  // lock metadata
   @Prop({ type: Boolean, default: false }) locked: boolean;
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  lockedBy: Types.ObjectId | null;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) lockedBy: Types.ObjectId | null;
   @Prop({ type: Date, default: null }) lockedAt: Date | null;
-
-  // unlock audit
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  unlockedBy: Types.ObjectId | null;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) unlockedBy: Types.ObjectId | null;
   @Prop({ type: Date, default: null }) unlockedAt: Date | null;
 }
 export const StepStatusSchema = SchemaFactory.createForClass(StepStatus);
 
-/**
- * Pre-questionnaire (per-user)
- */
 @Schema({ _id: false })
 export class PreQuestionnaire {
-  @Prop({ type: [String], default: [] })
-  answers: string[];
-
-  @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null })
-  selectedLawyer: Types.ObjectId | null;
-
-  @Prop({ type: Boolean, default: false })
-  submitted: boolean;
-
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  submittedBy: Types.ObjectId | null;
-
-  @Prop({ type: Date, default: null })
-  submittedAt: Date | null;
-
-  // Lock to prevent plain end-user re-submission (set when whole case is locked)
-  @Prop({ type: Boolean, default: false })
-  locked: boolean;
-
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  lockedBy: Types.ObjectId | null;
-
-  @Prop({ type: Date, default: null })
-  lockedAt: Date | null;
+  @Prop({ type: [String], default: [] }) answers: string[];
+  @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null }) selectedLawyer: Types.ObjectId | null;
+  @Prop({ type: Date, default: null }) selectedAt?: Date | null;
+  @Prop({ type: Boolean, default: false }) submitted: boolean;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) submittedBy: Types.ObjectId | null;
+  @Prop({ type: Date, default: null }) submittedAt: Date | null;
+  @Prop({ type: Boolean, default: false }) locked: boolean;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) lockedBy: Types.ObjectId | null;
+  @Prop({ type: Date, default: null }) lockedAt: Date | null;
 }
 export const PreQuestionnaireSchema = SchemaFactory.createForClass(PreQuestionnaire);
 
-/**
- * Main Case schema
- */
 export type CaseDocument = Case & Document;
 
 @Schema({ timestamps: true })
 export class Case {
-  @Prop({ type: String, default: 'Untitled case' })
-  title: string;
-
-  @Prop({ type: Object, default: null })
-  inviteCredentials?: {
-    email: string;
-    password: string;
-    createdAt: Date;
-  };
-
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
-  owner: Types.ObjectId;
-
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  invitedUser: Types.ObjectId | null;
-
-  @Prop({ type: String, default: null })
-  invitedEmail: string | null;
-
-  @Prop({ type: String, default: null })
-  inviteToken: string | null;
-
-  @Prop({ type: Date, default: null })
-  inviteTokenExpires: Date | null;
-
-  // Steps with their full typed structures
-  @Prop({ type: Step1DetailsSchema, default: {} })
-  step1: Step1Details;
-
-  @Prop({ type: Step2DetailsSchema, default: {} })
-  step2: Step2Details;
-
-  @Prop({ type: Step3DetailsSchema, default: {} })
-  step3: Step3Details;
-
-  @Prop({ type: Step4DetailsSchema, default: {} })
-  step4: Step4Details;
-
-  @Prop({ type: Step5DetailsSchema, default: {} })
-  step5: Step5Details;
-
-  @Prop({ type: Step6DetailsSchema, default: {} })
-  step6: Step6Details;
-
-  @Prop({ type: Step7DetailsSchema, default: {} })
-  step7: Step7Details;
-
-  // pre-questionnaire per user
-  @Prop({ type: PreQuestionnaireSchema, default: {} })
-  preQuestionnaireUser1: PreQuestionnaire;
-
-  @Prop({ type: PreQuestionnaireSchema, default: {} })
-  preQuestionnaireUser2: PreQuestionnaire;
-  
-  @Prop({ type: ApprovalSchema, default: {} })
-  approval?: Approval;
-
-  // per-step status
-  @Prop({
-    type: {
-      step1: StepStatusSchema,
-      step2: StepStatusSchema,
-      step3: StepStatusSchema,
-      step4: StepStatusSchema,
-      step5: StepStatusSchema,
-      step6: StepStatusSchema,
-      step7: StepStatusSchema,
-    },
-    default: {},
-  })
-  status: {
-    step1?: StepStatus;
-    step2?: StepStatus;
-    step3?: StepStatus;
-    step4?: StepStatus;
-    step5?: StepStatus;
-    step6?: StepStatus;
-    step7?: StepStatus;
-  };
-
-  /**
-   * FULL CASE LOCK
-   * When step7 is submitted we set fullyLocked = true and populate who locked it and when.
-   */
-  @Prop({ type: Boolean, default: false })
-  fullyLocked?: boolean;
-
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  fullyLockedBy?: Types.ObjectId | null;
-
-  @Prop({ type: Date, default: null })
-  fullyLockedAt?: Date | null;
+  @Prop({ type: String, default: 'Untitled case' }) title: string;
+  @Prop({ type: Object, default: null }) inviteCredentials?: { email: string; password: string; createdAt: Date; };
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true }) owner: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) invitedUser: Types.ObjectId | null;
+  @Prop({ type: String, default: null }) invitedEmail: string | null;
+  @Prop({ type: String, default: null }) inviteToken: string | null;
+  @Prop({ type: Date, default: null }) inviteTokenExpires: Date | null;
+  @Prop({ type: Step1DetailsSchema, default: {} }) step1: Step1Details;
+  @Prop({ type: Step2DetailsSchema, default: {} }) step2: Step2Details;
+  @Prop({ type: Step3DetailsSchema, default: {} }) step3: Step3Details;
+  @Prop({ type: Step4DetailsSchema, default: {} }) step4: Step4Details;
+  @Prop({ type: Step5DetailsSchema, default: {} }) step5: Step5Details;
+  @Prop({ type: Step6DetailsSchema, default: {} }) step6: Step6Details;
+  @Prop({ type: Step7DetailsSchema, default: {} }) step7: Step7Details;
+  @Prop({ type: PreQuestionnaireSchema, default: {} }) preQuestionnaireUser1: PreQuestionnaire;
+  @Prop({ type: PreQuestionnaireSchema, default: {} }) preQuestionnaireUser2: PreQuestionnaire;
+  @Prop({ type: ApprovalSchema, default: {} }) approval?: Approval;
+  @Prop({ type: { step1: StepStatusSchema, step2: StepStatusSchema, step3: StepStatusSchema, step4: StepStatusSchema, step5: StepStatusSchema, step6: StepStatusSchema, step7: StepStatusSchema }, default: {} })
+  status: { step1?: StepStatus; step2?: StepStatus; step3?: StepStatus; step4?: StepStatus; step5?: StepStatus; step6?: StepStatus; step7?: StepStatus; };
+  @Prop({ type: Boolean, default: false }) fullyLocked?: boolean;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) fullyLockedBy?: Types.ObjectId | null;
+  @Prop({ type: Date, default: null }) fullyLockedAt?: Date | null;
+  @Prop({ type: String, default: 'DRAFT', enum: ['DRAFT', 'CM', 'PAID', 'LAWYER'] }) workflowStatus?: string;
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null }) assignedCaseManager?: Types.ObjectId | null;
 }
-
 export const CaseSchema = SchemaFactory.createForClass(Case);
