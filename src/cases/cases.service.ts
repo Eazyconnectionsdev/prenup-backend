@@ -272,7 +272,7 @@ Wenup
 
     // enforce workflow state
     if (c.workflowStatus !== 'LAWYER') {
-      throw new ForbiddenException('Pre-questionnaire cannot be submitted: case not in LAWYER state');
+      throw new ForbiddenException('Pre-questionnaire cannot be submitted: case not in LAWYER Selection state');
     }
 
     if (!Types.ObjectId.isValid(actorId)) throw new BadRequestException('Invalid actor id');

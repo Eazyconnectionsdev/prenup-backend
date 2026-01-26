@@ -31,6 +31,8 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
 
+// import cookie helpers from same folder (adjust path if you put cookie.utils elsewhere)
+import { DEFAULT_COOKIE_OPTIONS, cookieOptionsWithMaxAge } from './cookie.utils';
 
 @Controller('auth')
 export class AuthController {
@@ -74,14 +76,8 @@ export class AuthController {
       ? Math.max(0, expiresAt - Date.now())
       : 7 * 24 * 60 * 60 * 1000;
 
-    res.cookie('access_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite:
-        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
-      maxAge,
-      path: '/',
-    });
+    // use centralized cookie options with maxAge
+    res.cookie('access_token', token, cookieOptionsWithMaxAge(maxAge));
 
     return {
       success: true,
@@ -115,13 +111,8 @@ export class AuthController {
   @Post('logout')
   @HttpCode(200)
   async logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie('access_token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite:
-        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
-      path: '/',
-    });
+    // clearCookie must match domain/path/sameSite/secure used when setting
+    res.clearCookie('access_token', { ...DEFAULT_COOKIE_OPTIONS, path: '/' });
     return { success: true };
   }
 
@@ -151,14 +142,8 @@ export class AuthController {
       ? Math.max(0, expiresAt - Date.now())
       : 7 * 24 * 60 * 60 * 1000;
 
-    res.cookie('access_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite:
-        process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
-      maxAge,
-      path: '/',
-    });
+    // include domain and other matching options
+    res.cookie('access_token', token, cookieOptionsWithMaxAge(maxAge));
 
     const userDoc = await this.usersService.findById(signed.user._id);
     if (!userDoc) {
@@ -203,7 +188,7 @@ export class AuthController {
     return { message: 'If that email exists and is unverified, a new OTP was sent.' };
   }
 
-
+  
   
   @Get('accept-invite')
   @HttpCode(200)
@@ -228,15 +213,8 @@ export class AuthController {
     const result = await this.authService.acceptInvite(caseId, token, email, password, name);
 
     if (res && result && result.token) {
-      const cookieOptions = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite:
-          process.env.NODE_ENV === 'production' ? ('none' as const) : ('lax' as const),
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-        path: '/',
-      };
-      res.cookie('access_token', result.token, cookieOptions);
+      const maxAge = 7 * 24 * 60 * 60 * 1000;
+      res.cookie('access_token', result.token, cookieOptionsWithMaxAge(maxAge));
     }
 
     return {
