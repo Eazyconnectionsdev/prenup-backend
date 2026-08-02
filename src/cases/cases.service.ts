@@ -4,7 +4,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import { Case, CaseDocument, StepStatus, PreQuestionnaire, Approval } from './schemas/case.schema';
+import {
+  Case,
+  CaseDocument,
+  SectionStatus,
+  PreQuestionnaire,
+  Approval,
+} from './schemas/case.schema';
+
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { MailService } from '../mail/mail.service';
 
@@ -15,28 +22,141 @@ export class CasesService {
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
-  private defaultStepStatus(): StepStatus {
-    return { submitted: false, submittedBy: null, submittedAt: null, locked: false, lockedBy: null, lockedAt: null, unlockedBy: null, unlockedAt: null } as StepStatus;
-  }
-  private ensureStepStatusObj(c: CaseDocument, stepKey: `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`): StepStatus {
+  private readonly STEP_MAP = {
+    'personal-information': {
+      section: 'myInformation',
+      field: 'personalInformation',
+    },
+
+    'legal-declaration': {
+      section: 'myInformation',
+      field: 'legalDeclaration',
+    },
+
+    'family-and-dependents': {
+      section: 'myInformation',
+      field: 'familyAndDependents',
+    },
+
+    'individual-assets': {
+      section: 'myInformation',
+      field: 'individualAssets',
+    },
+
+    'income-and-revenue': {
+      section: 'myInformation',
+      field: 'incomeAndRevenue',
+    },
+
+    'liabilities-and-debts': {
+      section: 'myInformation',
+      field: 'liabilitiesAndDebts',
+    },
+
+    'partner-personal-information': {
+      section: 'partnerInformation',
+      field: 'personalInformation',
+    },
+
+    'partner-legal-declaration': {
+      section: 'partnerInformation',
+      field: 'legalDeclaration',
+    },
+
+    'partner-family-and-dependents': {
+      section: 'partnerInformation',
+      field: 'familyAndDependents',
+    },
+
+    'partner-individual-assets': {
+      section: 'partnerInformation',
+      field: 'individualAssets',
+    },
+
+    'partner-income-and-revenue': {
+      section: 'partnerInformation',
+      field: 'incomeAndRevenue',
+    },
+
+    'partner-liabilities-and-debts': {
+      section: 'partnerInformation',
+      field: 'liabilitiesAndDebts',
+    },
+
+    'joint-assets': {
+      section: 'jointInformation',
+      field: 'jointAssets',
+    },
+
+    'joint-income-and-revenue': {
+      section: 'jointInformation',
+      field: 'jointIncomeAndRevenue',
+    },
+
+    'joint-liabilities-and-debts': {
+      section: 'jointInformation',
+      field: 'jointLiabilitiesAndDebts',
+    },
+
+    'solicitor-details': {
+      section: 'independentLegalAdvice',
+      field: 'solicitorDetails',
+    },
+
+    'lawyer-questionnaire': {
+      section: 'independentLegalAdvice',
+      field: 'lawyerQuestionnaire',
+    },
+
+    'review-and-sign': {
+      section: 'independentLegalAdvice',
+      field: 'reviewAndSign',
+    },
+  };
+private defaultSectionStatus(): SectionStatus {
+  return {
+    submitted: false,
+    submittedBy: null,
+    submittedAt: null,
+    locked: false,
+    lockedBy: null,
+    lockedAt: null,
+    unlockedBy: null,
+    unlockedAt: null,
+  } as SectionStatus;
+}
+  private ensureSectionStatus(
+    c: CaseDocument,
+    section: string,
+  ): SectionStatus {
+
     c.status = c.status || {};
+
     const statusAny = c.status as any;
-    if (!statusAny[stepKey]) {
-      statusAny[stepKey] = this.defaultStepStatus();
+
+    if (!statusAny[section]) {
+      statusAny[section] =
+        this.defaultSectionStatus();
     }
-    return statusAny[stepKey] as StepStatus;
+
+    return statusAny[
+      section
+    ] as SectionStatus;
   }
   private makeEmptyPreQuestionnaire(): PreQuestionnaire {
     return { answers: [], selectedLawyer: null, submitted: false, submittedBy: null, submittedAt: null, locked: false, lockedBy: null, lockedAt: null } as PreQuestionnaire;
   }
-  public areAllStepsSubmitted(c: CaseDocument): boolean {
-    if (!c || !c.status) return false;
-    for (let i = 1; i <= 7; i++) {
-      const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-      const s = (c.status as any)[sk];
-      if (!s || !s.submitted) return false;
-    }
-    return true;
+  public areAllSectionsSubmitted(
+    c: CaseDocument,
+  ): boolean {
+
+    return !!(
+      c.status?.myInformation?.submitted &&
+      c.status?.partnerInformation?.submitted &&
+      c.status?.jointInformation?.submitted &&
+      c.status?.independentLegalAdvice
+        ?.submitted
+    );
   }
   async create(ownerId: string, title?: string): Promise<CaseDocument> {
     const c = new this.caseModel({ title: title || 'Untitled case', owner: new Types.ObjectId(ownerId), workflowStatus: 'DRAFT' });
@@ -85,175 +205,159 @@ export class CasesService {
     }
     return { inviteUrl };
   }
-  async updateStep(caseId: string, stepNumber: number, data: any, actorId: string, isPrivileged = false, actorFull?: any): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    if (!Number.isInteger(stepNumber) || stepNumber < 1 || stepNumber > 7) throw new BadRequestException('Invalid step');
-    if (c.workflowStatus === 'CM' && !isPrivileged) {
-      const actorObjId = Types.ObjectId.isValid(actorId) ? new Types.ObjectId(actorId) : null;
-      const assignedId = (c as any).assignedCaseManager;
-      const assignedMatches = assignedId && (Types.ObjectId.isValid(assignedId) ? new Types.ObjectId(assignedId).toString() === actorObjId?.toString() : (assignedId as any).toString() === actorObjId?.toString());
-      if (!assignedMatches) throw new ForbiddenException('Only the assigned Case Manager may edit while case is in CM stage');
+  async updateQuestionnaireStep(
+    caseId: string,
+    stepName: string,
+    data: any,
+    actorId: string,
+    isPrivileged = false,
+  ): Promise<CaseDocument> {
+
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
     }
-    if (c.fullyLocked && !isPrivileged) throw new ForbiddenException('Case is fully locked and cannot be modified');
-    const key = `step${stepNumber}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-    (c as any)[key] = data;
-    const stepStatus = this.ensureStepStatusObj(c, key);
-    stepStatus.submitted = true;
-    stepStatus.submittedBy = new Types.ObjectId(actorId);
-    stepStatus.submittedAt = new Date();
-    if (stepNumber === 7) {
-      const requiredUser1 = [1, 2, 5, 6, 7];
-      const requiredUser2 = [3, 4];
-      const statusAny = c.status || {};
-      const isSubmitted = (n: number) => Boolean(statusAny[`step${n}`] && statusAny[`step${n}`].submitted);
-      const missingUser1 = requiredUser1.filter((n) => !isSubmitted(n));
-      const missingUser2 = requiredUser2.filter((n) => !isSubmitted(n));
-      if (!c.invitedUser) throw new BadRequestException('Cannot submit step 7: invited user not attached to case.');
-      if (missingUser1.length || missingUser2.length) {
-        const parts: string[] = [];
-        if (missingUser1.length) parts.push(`owner missing steps: ${missingUser1.join(', ')}`);
-        if (missingUser2.length) parts.push(`invited user missing steps: ${missingUser2.join(', ')}`);
-        throw new BadRequestException(`Cannot submit step 7. Please ensure all required steps are saved before final submission. ${parts.join('; ')}`);
+
+    const config =
+      this.STEP_MAP[
+      stepName as keyof typeof this.STEP_MAP
+      ];
+
+    if (!config) {
+      throw new BadRequestException(
+        'Invalid step',
+      );
+    }
+
+    const { section, field } = config;
+
+    (c as any)[section] =
+      (c as any)[section] || {};
+
+    (c as any)[section][field] = data;
+
+    const status =
+      this.ensureSectionStatus(
+        c,
+        section,
+      );
+
+    status.submitted = true;
+    status.submittedBy =
+      new Types.ObjectId(actorId);
+
+    status.submittedAt =
+      new Date();
+
+    if (stepName === 'review-and-sign') {
+
+      if (
+        !this.areAllSectionsSubmitted(
+          c,
+        )
+      ) {
+        throw new BadRequestException(
+          'All sections must be submitted',
+        );
       }
-      c.fullyLocked = true;
-      c.fullyLockedBy = new Types.ObjectId(actorId);
-      c.fullyLockedAt = new Date();
+
       const now = new Date();
-      for (let i = 1; i <= 7; i++) {
-        const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-        const s = this.ensureStepStatusObj(c, sk);
+
+      c.fullyLocked = true;
+      c.fullyLockedAt = now;
+      c.fullyLockedBy =
+        new Types.ObjectId(actorId);
+
+      for (const name of [
+        'myInformation',
+        'partnerInformation',
+        'jointInformation',
+        'independentLegalAdvice',
+      ]) {
+        const s =
+          this.ensureSectionStatus(
+            c,
+            name,
+          );
+
         s.locked = true;
-        s.lockedBy = new Types.ObjectId(actorId);
+        s.lockedBy =
+          new Types.ObjectId(actorId);
+
         s.lockedAt = now;
       }
     }
+
     await c.save();
-    try {
-      if (c.fullyLocked && this.areAllStepsSubmitted(c)) {
-        const populated = await this.caseModel.findById(c._id).populate('owner invitedUser').exec();
-        const recipients: { email: string; name?: string }[] = [];
-        const ownerObj = (populated as any).owner;
-        const invitedObj = (populated as any).invitedUser;
-        if (ownerObj && typeof ownerObj === 'object' && ownerObj.email) recipients.push({ email: ownerObj.email, name: ownerObj.name || null });
-        if (invitedObj && typeof invitedObj === 'object' && invitedObj.email) recipients.push({ email: invitedObj.email, name: invitedObj.name || null });
-        if (recipients.length === 0 && c.invitedEmail)
-          recipients.push({ email: c.invitedEmail });
-        const uniqueRecipients = Array.from(new Map(recipients.map(r => [r.email, r])).values());
-        const pNames = uniqueRecipients.map(r => r.name || '').filter(Boolean).join(' and ') || '';
-        const greetingNames = pNames ? `Hi ${pNames},` : 'Hello,';
-        const agreementSubject = `Agreement Submitted — case ${c._id}`;
-        const agreementBody = `${greetingNames}
-Thank you for submitting your responses to the Wenup questionnaire.
 
-A draft of your nuptial agreement has now been generated. You’ll receive this as a Google Document shortly, and a PDF version will also be available for you to access via the Wenup platform.
-
-Your case manager will be in touch with you both within the next 1–2 business days, once your agreement has been reviewed, to discuss the next steps. Please keep an eye out for an email from them.
-
-If you have any questions in the meantime, feel free to get in touch.
-
-Visit Wenup
-Thank you for using our application!
-
-Regards,
-Wenup
-`;
-        if (this.mailService && typeof (this.mailService as any).sendAgreementSubmittedForCase === 'function') {
-          try {
-            await (this.mailService as any).sendAgreementSubmittedForCase(c, uniqueRecipients.map(u => u.email));
-          } catch (e) {
-            for (const r of uniqueRecipients) {
-              if (typeof (this.mailService as any).sendMail === 'function') {
-                try { await (this.mailService as any).sendMail(r.email, agreementSubject, agreementBody); } catch (e) { }
-              }
-            }
-          }
-        } else if (this.mailService && typeof (this.mailService as any).sendMail === 'function') {
-          for (const r of uniqueRecipients) {
-            try { await (this.mailService as any).sendMail(r.email, agreementSubject, agreementBody); } catch (e) { }
-          }
-        }
-        try {
-          if (this.mailService && typeof (this.mailService as any).sendCaseManagerIntimation === 'function') {
-            await (this.mailService as any).sendCaseManagerIntimation(c);
-          } else {
-            const env = this.config.get('CASE_MANAGER_EMAILS') || '';
-            const emails = (env as string).split(',').map((s) => s.trim()).filter(Boolean);
-            const cmSubject = `Case ready for review — ${c._id}`;
-            const cmBody = `A case has reached the Case Manager stage and requires review/assignment.
-
-Case: ${c._id}
-Title: ${(c as any).title ?? 'N/A'}
-
-Please login to the platform to review and assign the case.
-`;
-            if (emails.length > 0 && typeof (this.mailService as any).sendMail === 'function') {
-              for (const to of emails) {
-                try { await (this.mailService as any).sendMail(to, cmSubject, cmBody); } catch (e) { }
-              }
-            }
-          }
-        } catch (e) { }
-        const docLink = this.DUMMY_AGREEMENT_DRIVE_LINK;
-        const linkSubject = `Your draft agreement is ready — case ${c._id}`;
-        const linkBody = `${greetingNames}
-A draft document of your agreement has been uploaded.
-
-You can view the draft here:
-${docLink}
-
-This link is provided for review. The official PDF will be available on the Wenup platform.
-
-Regards,
-Wenup
-`;
-        try {
-          if (this.mailService && typeof (this.mailService as any).sendAgreementDocumentLink === 'function') {
-            await (this.mailService as any).sendAgreementDocumentLink(c, docLink, uniqueRecipients.map(u => u.email));
-          } else if (this.mailService && typeof (this.mailService as any).sendMail === 'function') {
-            for (const r of uniqueRecipients) {
-              try { await (this.mailService as any).sendMail(r.email, linkSubject, linkBody); } catch (e) { }
-            }
-          }
-        } catch (e) { }
-      }
-    } catch (err) { }
     return c;
   }
-  async unlockCase(caseId: string, actorId: string): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    this.ensureStepStatusObj(c, 'step7');
-    const step7Status = (c.status as any).step7 as StepStatus;
-    const step7Submitted = Boolean(step7Status.submitted) || Boolean(step7Status.submittedAt);
-    if (!c.fullyLocked && !step7Submitted) throw new BadRequestException('Case is not fully locked nor locked by step 7 submission');
-    const actorObjId = Types.ObjectId.isValid(actorId) ? new Types.ObjectId(actorId) : null;
-    const now = new Date();
+  async unlockCase(
+    caseId: string,
+    actorId: string,
+  ): Promise<CaseDocument> {
+
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException(
+        'Invalid case id',
+      );
+    }
+
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    const sections = [
+      'myInformation',
+      'partnerInformation',
+      'jointInformation',
+      'independentLegalAdvice',
+    ];
+
     c.fullyLocked = false;
     c.fullyLockedBy = null;
     c.fullyLockedAt = null;
-    for (let i = 1; i <= 7; i++) {
-      const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-      const s = this.ensureStepStatusObj(c, sk);
+
+    const now = new Date();
+
+    for (const section of sections) {
+      const s =
+        this.ensureSectionStatus(
+          c,
+          section,
+        );
+
       s.locked = false;
       s.lockedBy = null;
       s.lockedAt = null;
-      s.unlockedBy = actorObjId;
+
+      s.unlockedBy =
+        new Types.ObjectId(actorId);
+
       s.unlockedAt = now;
     }
+
     if (c.preQuestionnaireUser1) {
-      c.preQuestionnaireUser1.locked = false;
-      c.preQuestionnaireUser1.lockedBy = null;
-      c.preQuestionnaireUser1.lockedAt = null;
+      c.preQuestionnaireUser1.locked =
+        false;
     }
+
     if (c.preQuestionnaireUser2) {
-      c.preQuestionnaireUser2.locked = false;
-      c.preQuestionnaireUser2.lockedBy = null;
-      c.preQuestionnaireUser2.lockedAt = null;
+      c.preQuestionnaireUser2.locked =
+        false;
     }
+
     await c.save();
+
     return c;
   }
   async updatePreQuestionnaire(caseId: string, updatePatch: any): Promise<CaseDocument> {
@@ -411,8 +515,13 @@ ${taskLines.join('\n\n')}`;
     const c = await this.caseModel.findById(caseId).exec();
     if (!c) throw new NotFoundException('Case not found');
 
-    if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) {
-      throw new BadRequestException('Lawyer selection is allowed only after all steps are submitted and the case is fully locked');
+    if (
+      !c.fullyLocked ||
+      !this.areAllSectionsSubmitted(c)
+    ) {
+      throw new BadRequestException(
+        'Lawyer selection is allowed only after all sections are submitted and the case is fully locked',
+      );
     }
 
     const actorObjId = new Types.ObjectId(actorId);
@@ -537,19 +646,55 @@ ${taskLines.join('\n\n')}`;
     try {
       const actorEmailDirect = isOwner ? resolveEmailLocal(populated?.owner) : resolveEmailLocal(populated?.invitedUser, populated?.invitedEmail ?? undefined);
       if (actorEmailDirect) {
-        const requiredSteps = isOwner ? [1, 2, 5, 6, 7] : [3, 4];
-        const missing = requiredSteps.filter((n) => {
-          const s = (c.status as any)[`step${n}`];
-          return !(s && s.submitted);
-        });
-        const friendlyMissing = missing.map((n) => this.friendlyStepName(n));
+        const missingSections: string[] =
+          [];
+
+        if (
+          !c.status?.myInformation
+            ?.submitted
+        ) {
+          missingSections.push(
+            'My Information',
+          );
+        }
+
+        if (
+          !c.status?.partnerInformation
+            ?.submitted
+        ) {
+          missingSections.push(
+            'Partner Information',
+          );
+        }
+
+        if (
+          !c.status?.jointInformation
+            ?.submitted
+        ) {
+          missingSections.push(
+            'Joint Information',
+          );
+        }
+
+        if (
+          !c.status
+            ?.independentLegalAdvice
+            ?.submitted
+        ) {
+          missingSections.push(
+            'Independent Legal Advice',
+          );
+        }
         const subjectActor = `Agreement status: Second step completed — case ${c._id}`;
         const bodyTextActor = `Hello,
 
 You have selected a lawyer for case ${c._id}.
 Completed: Select lawyer (second step).
-Remaining required steps for you: ${friendlyMissing.length > 0 ? friendlyMissing.join(', ') : 'None — you have completed your required steps.'}
-
+Remaining required sections:
+${missingSections.length > 0
+            ? missingSections.join(', ')
+            : 'None'
+          }
 Your selected lawyer:
 ${(lawyerDoc as any).name ?? 'N/A'}${this.getLawyerContactEmail(lawyerDoc) ? `\nEmail: ${this.getLawyerContactEmail(lawyerDoc)}` : ''}
 
@@ -624,10 +769,46 @@ LetsPrenup Team
     if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
     return this.caseModel.findByIdAndUpdate(caseId, { inviteCredentials: creds }, { new: true, useFindAndModify: false }).exec();
   }
-  async deleteCaseDataForPartner(caseId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    const updated = await this.caseModel.findByIdAndUpdate(caseId, { $set: { step3: {}, step4: {}, 'status.step3.submitted': false, 'status.step3.submittedBy': null, 'status.step3.submittedAt': null, 'status.step4.submitted': false, 'status.step4.submittedBy': null, 'status.step4.submittedAt': null } }, { new: true });
-    if (!updated) throw new NotFoundException('Case not found');
+  async deleteCaseDataForPartner(
+    caseId: string,
+  ): Promise<void> {
+
+    if (
+      !Types.ObjectId.isValid(caseId)
+    ) {
+      throw new BadRequestException(
+        'Invalid case id',
+      );
+    }
+
+    const updated =
+      await this.caseModel
+        .findByIdAndUpdate(
+          caseId,
+          {
+            $set: {
+              partnerInformation: {},
+
+              'status.partnerInformation.submitted':
+                false,
+
+              'status.partnerInformation.submittedBy':
+                null,
+
+              'status.partnerInformation.submittedAt':
+                null,
+            },
+          },
+          {
+            new: true,
+          },
+        );
+
+    if (!updated) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
   }
   private ensureApprovalObj(c: CaseDocument): Approval {
     if (!c.approval) (c as any).approval = {};
@@ -637,7 +818,14 @@ LetsPrenup Team
     if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
-    if (!c.fullyLocked || !this.areAllStepsSubmitted(c)) throw new BadRequestException('Case must be fully locked and completed before approval');
+    if (
+      !c.fullyLocked ||
+      !this.areAllSectionsSubmitted(c)
+    ) {
+      throw new BadRequestException(
+        'Lawyer selection is allowed only after all sections are submitted and the case is fully locked',
+      );
+    }
     const actorObjId = new Types.ObjectId(actorId);
     const isOwner = c.owner?.toString() === actorObjId.toString();
     const isInvited = c.invitedUser?.toString() === actorObjId.toString();
@@ -750,13 +938,29 @@ Wenup
       c.fullyLockedAt = null;
       if (c.preQuestionnaireUser1) { c.preQuestionnaireUser1.submitted = false; c.preQuestionnaireUser1.submittedBy = null; c.preQuestionnaireUser1.submittedAt = null; }
       if (c.preQuestionnaireUser2) { c.preQuestionnaireUser2.submitted = false; c.preQuestionnaireUser2.submittedBy = null; c.preQuestionnaireUser2.submittedAt = null; }
-      for (let i = 1; i <= 7; i++) {
-        const sk = `step${i}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-        const s = this.ensureStepStatusObj(c, sk);
+      const sections = [
+        'myInformation',
+        'partnerInformation',
+        'jointInformation',
+        'independentLegalAdvice',
+      ];
+
+      for (const section of sections) {
+        const s =
+          this.ensureSectionStatus(
+            c,
+            section,
+          );
+
         s.locked = false;
         s.lockedBy = null;
         s.lockedAt = null;
-        s.unlockedBy = Types.ObjectId.isValid(actorId) ? new Types.ObjectId(actorId) : null;
+
+        s.unlockedBy =
+          Types.ObjectId.isValid(actorId)
+            ? new Types.ObjectId(actorId)
+            : null;
+
         s.unlockedAt = new Date();
       }
       await c.save();
@@ -867,84 +1071,94 @@ Wenup
       return null;
     } catch (err) { return null; }
   }
-  private friendlyStepName(stepNumber: number): string {
-    switch (stepNumber) {
-      case 1: return 'Personal details (step 1)';
-      case 2: return 'Select lawyer (step 2)';
-      case 3: return 'Partner personal details (step 3)';
-      case 4: return 'Partner finances (step 4)';
-      case 5: return 'Joint assets (step 5)';
-      case 6: return 'Future assets (step 6)';
-      case 7: return 'Finalise & submit (step 7)';
-      default: return `Step ${stepNumber}`;
+
+  async getQuestionnaireSection(
+    caseId: string,
+    sectionName: string,
+    user: any,
+  ) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException(
+        'Invalid case id',
+      );
     }
-  }
-  async getStepForUi(caseId: string, stepNumber: number, user: any) {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    const isPrivileged = this.isPrivilegedRole(user?.role);
+
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    const isPrivileged =
+      this.isPrivilegedRole(
+        user?.role,
+      );
+
     if (!isPrivileged) {
-      const userIdStr = (user.id ?? user._id)?.toString();
-      if (c.owner?.toString() !== userIdStr && c.invitedUser?.toString() !== userIdStr) throw new ForbiddenException('Forbidden');
-    }
-    if (!Number.isInteger(stepNumber) || stepNumber < 1 || stepNumber > 7) throw new BadRequestException('Invalid step number');
-    const key = `step${stepNumber}` as `step${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-    const doc = (c as any).toObject ? (c as any).toObject() : c;
-    const storedStepData = doc[key] ?? {};
-    const rawStatus = (doc.status && doc.status[key]) || {};
-    const getEmptyStepTemplate = (n: number) => {
-      switch (n) {
-        case 1:
-        case 3:
-          return { firstName: null, middleNames: null, lastName: null, dateOfBirth: null, address: null, dateOfMarriage: null, hasChildren: false, fluentInEnglish: false, nationality: null, domicileResidencyStatus: null, occupation: null, incomeGBP: null, overviewAim: null, currentLivingSituation: null, confirm_wenup_platform_used: false, property_personal_possessions_remain: false, family_home_divided_equally: false, court_can_depart_for_children: false, agree_costs_shared: false };
-        case 2:
-        case 4:
-          return { separateEarnings: false, earningsEntries: [], separateProperties: false, propertyEntries: [], separateSavings: false, savingsEntries: [], separatePensions: false, pensionEntries: [], separateDebts: false, debtEntries: [], separateBusinesses: false, businessEntries: [], separateChattels: false, chattelEntries: [], separateOtherAssets: false, otherAssetEntries: [] };
-        case 5:
-          return { sharedEarnings: false, sharedEarningsDetails: {}, sharedDebts: false, sharedDebtsDetails: {}, sharedBusinesses: false, sharedBusinessesDetails: {}, sharedChattels: false, sharedChattelsDetails: {}, sharedOtherAssets: false, sharedOtherAssetsDetails: {}, liveInRentedOrOwned: false, sharedSavings: false, sharedPensions: false };
-        case 6:
-          return { inheritanceConsideredSeparate: false, giftConsideredSeparate: false, futureAssetsTreatedJointOrSeparate: false, willBeSameAsDivorceSplit: false, wantWillHelp: false, person1FutureInheritance: { originalAmount: null, originalCurrency: null, gbpEquivalent: null, basisOfEstimate: null }, person2FutureInheritance: { originalAmount: null, originalCurrency: null, gbpEquivalent: null, basisOfEstimate: null } };
-        case 7:
-          return { isOnePregnant: false, isOnePregnantOverview: null, businessWorkedTogether: false, businessWorkedTogetherOverview: null, oneOutOfWorkOrDependent: false, oneOutOfWorkOverview: null, familyHomeOwnedWith3rdParty: false, familyHome3rdPartyOverview: null, combinedAssetsOver3m: false, combinedAssetsOver3mOverview: null, childFromPreviousRelationshipsLivingWithYou: false, childFromPreviousOverview: null, additionalComplexities: {} };
-        default:
-          return {};
+      const uid =
+        (
+          user?.id ??
+          user?._id
+        )?.toString();
+
+      if (
+        c.owner?.toString() !== uid &&
+        c.invitedUser?.toString() !== uid
+      ) {
+        throw new ForbiddenException(
+          'Forbidden',
+        );
       }
+    }
+
+    const sections = {
+      myInformation:
+        c.myInformation,
+
+      partnerInformation:
+        c.partnerInformation,
+
+      jointInformation:
+        c.jointInformation,
+
+      independentLegalAdvice:
+        c.independentLegalAdvice,
     };
-    const mergedData = { ...getEmptyStepTemplate(stepNumber), ...storedStepData };
-    const statusNormalized = { submitted: !!rawStatus.submitted, submittedBy: rawStatus.submittedBy ? rawStatus.submittedBy.toString() : null, submittedAt: rawStatus.submittedAt ? rawStatus.submittedAt : null, locked: !!rawStatus.locked, lockedBy: rawStatus.lockedBy ? rawStatus.lockedBy.toString() : null, lockedAt: rawStatus.lockedAt ? rawStatus.lockedAt : null, unlockedBy: rawStatus.unlockedBy ? rawStatus.unlockedBy.toString() : null, unlockedAt: rawStatus.unlockedAt ? rawStatus.unlockedAt : null };
-    const defaultStatus = { submitted: false, submittedBy: null, submittedAt: null, locked: false, lockedBy: null, lockedAt: null, unlockedBy: null, unlockedAt: null };
-    const finalStatus = Object.values(statusNormalized).some((v) => v !== null && v !== false) ? statusNormalized : defaultStatus;
-    if (stepNumber === 5) {
-      const STEP5_HEADING = 'Joint assets';
-      const STEP5_QUESTIONS = [
-        `Do you have any shared earnings or earnings you'd like to share in the event of a divorce or separation?`,
-        `Do you currently (or will you once married) live in a property that is rented or owned by one or both of you?`,
-        `Do you have any shared savings or savings you'd like to share in the event of a divorce or separation?`,
-        `Do you have any shared pensions or pensions you'd like to share in the event of a divorce or separation?`,
+
+    const status =
+      (c.status as any)?.[
+      sectionName
+      ] || {
+        submitted: false,
+        submittedBy: null,
+        submittedAt: null,
+        locked: false,
+        lockedBy: null,
+        lockedAt: null,
+        unlockedBy: null,
+        unlockedAt: null,
+      };
+
+    const data =
+      (sections as any)[
+      sectionName
       ];
-      const STEP5_FOLLOW_UPS = [
-        `Do you have any shared debts or debts you'd like to share in the event of a divorce or separation? This includes current credit card balances, loans, etc.`,
-        `Do you have any shared businesses or businesses you'd like to share in the event of a divorce or separation?`,
-        `Do you have any shared chattels or chattels you'd like to share in the event of a divorce or separation?`,
-        `Do you have any other shared assets or any other assets you'd like to share in the event of a divorce or separation?`,
-      ];
-      const uiQuestions = STEP5_QUESTIONS.map((q, idx) => ({ question: q, answer: idx === 0 ? mergedData.sharedEarnings ? 'yes' : 'no' : idx === 1 ? mergedData.liveInRentedOrOwned ? 'yes' : 'no' : idx === 2 ? mergedData.sharedSavings ? 'yes' : 'no' : idx === 3 ? mergedData.sharedPensions ? 'yes' : 'no' : null }));
-      const uiFollowUps = STEP5_FOLLOW_UPS.map((q, idx) => ({ question: q, answer: idx === 0 ? mergedData.sharedDebts ? 'yes' : 'no' : idx === 1 ? mergedData.sharedBusinesses ? 'yes' : 'no' : idx === 2 ? mergedData.sharedChattels ? 'yes' : 'no' : idx === 3 ? mergedData.sharedOtherAssets ? 'yes' : 'no' : null, details: idx === 0 ? mergedData.sharedDebtsDetails || {} : idx === 1 ? mergedData.sharedBusinessesDetails || {} : idx === 2 ? mergedData.sharedChattelsDetails || {} : idx === 3 ? mergedData.sharedOtherAssetsDetails || {} : {} }));
-      return { stepNumber, data: { heading: STEP5_HEADING, questions: uiQuestions, followUpsShown: !!mergedData.sharedEarnings, followUps: uiFollowUps, savedAt: (mergedData.sharedEarningsDetails && mergedData.sharedEarningsDetails.ui && mergedData.sharedEarningsDetails.ui.savedAt) || doc.updatedAt || null }, status: finalStatus, fullyLocked: !!doc.fullyLocked };
+
+    if (!data) {
+      throw new BadRequestException(
+        'Unknown section',
+      );
     }
-    if (stepNumber === 6) {
-      const STEP6_HEADING = 'Future Assets';
-      const STEP6_QUESTIONS = [
-        `If one of you inherits something, will the inheritance be considered the separate asset (Separate) for the person who inherits it, or a joint asset (Joint) shared between both of you?`,
-        `If one of you is gifted something, will the gift be considered a separate asset (Separate) for whichever of you receives it, or a joint asset (Joint) shared between both of you?`,
-        `Do you want any future assets or debts acquired in either of your sole names to be treated as Joint or Separate?`,
-        `This agreement governs what happens in the event of divorce not death, however it is advisable that you make a new Will once you are married. Do you expect what you leave each other in the event of one of your deaths to be the same as the way your assets will be split in the event of a divorce?`,
-      ];
-      const uiQuestions = STEP6_QUESTIONS.map((q, idx) => ({ question: q, answer: idx === 0 ? mergedData.inheritanceConsideredSeparate ? 'yes' : 'no' : idx === 1 ? mergedData.giftConsideredSeparate ? 'yes' : 'no' : idx === 2 ? mergedData.futureAssetsTreatedJointOrSeparate ? 'yes' : 'no' : idx === 3 ? mergedData.willBeSameAsDivorceSplit ? 'yes' : 'no' : null }));
-      const uiPayload = { heading: STEP6_HEADING, questions: uiQuestions, inheritanceSeparate: !!mergedData.inheritanceConsideredSeparate, giftsSeparate: !!mergedData.giftConsideredSeparate, futureSoleAssetsSeparate: !!mergedData.futureAssetsTreatedJointOrSeparate, sameAsWill: !!mergedData.willBeSameAsDivorceSplit, wantWillAssistance: !!mergedData.wantWillHelp, sooriyaFutureInheritance: { originalAmount: mergedData.person1FutureInheritance?.originalAmount ?? null, originalCurrency: mergedData.person1FutureInheritance?.originalCurrency ?? null, gbpEquivalent: mergedData.person1FutureInheritance?.gbpEquivalent ?? null, basisOfEstimate: mergedData.person1FutureInheritance?.basisOfEstimate ?? null }, gomathiFutureInheritance: { originalAmount: mergedData.person2FutureInheritance?.originalAmount ?? null, originalCurrency: mergedData.person2FutureInheritance?.originalCurrency ?? null, gbpEquivalent: mergedData.person2FutureInheritance?.gbpEquivalent ?? null, basisOfEstimate: mergedData.person2FutureInheritance?.basisOfEstimate ?? null }, savedAt: (mergedData.person1FutureInheritance && (mergedData.person1FutureInheritance as any).savedAt) || doc.updatedAt || null };
-      return { stepNumber, data: uiPayload, status: finalStatus, fullyLocked: !!doc.fullyLocked };
-    }
-    return { stepNumber, data: mergedData, status: finalStatus, fullyLocked: !!doc.fullyLocked };
+
+    return {
+      section: sectionName,
+      data,
+      status,
+      fullyLocked:
+        !!c.fullyLocked,
+    };
   }
 }
