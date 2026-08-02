@@ -213,14 +213,9 @@ export class AuthController {
     const result = await this.authService.acceptInvite(caseId, token, email, password, name);
 
     if (res && result && result.token) {
-      const maxAge = 7 * 24 * 60 * 60 * 1000;
-      res.cookie('access_token', result.token, cookieOptionsWithMaxAge(maxAge));
+     return res.redirect('https://prenup-weld.vercel.app/login');
     }
 
-    return {
-      message: 'Invite accepted, user registered',
-      ...result,
-    };
   }
 
     @UseGuards(JwtAuthGuard)
