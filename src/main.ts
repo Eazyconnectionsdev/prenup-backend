@@ -39,7 +39,7 @@ async function bootstrap() {
 
     // --- CORS ---
     app.enableCors({
-      origin: frontendOrigin,
+       origin: [frontendOrigin, 'https://app.letsprenup.co.uk'],
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
