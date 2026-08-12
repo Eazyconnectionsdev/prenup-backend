@@ -1537,18 +1537,19 @@ Wenup
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    const fileName = `agreement-${caseId}-${Date.now()}.docx`;
-    const filePath = path.join(outputDir, fileName);
-    fs.writeFileSync(filePath, buffer);
+    // const fileName = `agreement-${caseId}-${Date.now()}.docx`;
+    // const filePath = path.join(outputDir, fileName);
+    // fs.writeFileSync(filePath, buffer);
 
-    (c as any).agreementDocument = {
-      fileName,
-      filePath,
-      generatedAt: new Date(),
-      approvedBy: actorObjId,
-    };
-    await c.save();
+    // (c as any).agreementDocument = {
+    //   fileName,
+    //   filePath,
+    //   generatedAt: new Date(),
+    //   approvedBy: actorObjId,
+    // };
 
-    return { success: true, fileName, filePath };
+    // await c.save();
+
+    return { success: true, fileName : '', filePath : '' };
   }
 }
