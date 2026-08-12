@@ -8,6 +8,7 @@ import { LawyersService } from './lawyer.service';
 @Controller('cases')
 export class CasesController {
   constructor(private casesService: CasesService, private lawyersService: LawyersService) { }
+ 
   private ensureUser(req: any) {
     const user = req.user;
     if (!user) throw new UnauthorizedException('Authentication required');
@@ -16,6 +17,7 @@ export class CasesController {
   private isPrivilegedRole(role?: string) {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
+
   @UseGuards(JwtAuthGuard)
   @Post()
   async create(@Req() req, @Body() body: CreateCaseDto) {
@@ -23,6 +25,8 @@ export class CasesController {
     const title = body.title;
     return this.casesService.create(user.id, title);
   }
+
+
   @UseGuards(JwtAuthGuard)
   @Get()
   async list(@Req() req) {
@@ -33,6 +37,8 @@ export class CasesController {
     }
     return this.casesService.findByUser(user.id);
   }
+
+
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findById(@Req() req, @Param('id') id: string) {
@@ -42,6 +48,8 @@ export class CasesController {
 
     return c;
   }
+
+
   @UseGuards(JwtAuthGuard)
   @Post(':id/invite')
   async invite(@Req() req, @Param('id') id: string, @Body('email') email: string) {
@@ -55,6 +63,8 @@ export class CasesController {
     }
     return this.casesService.invite(id, user.id, email);
   }
+
+
   @UseGuards(JwtAuthGuard)
   @Post(':id/attach-invited')
   async attachInvitedUser(@Req() req, @Param('id') id: string) {
@@ -115,6 +125,8 @@ export class CasesController {
     if (!isPrivileged) throw new ForbiddenException('Only privileged users may unlock cases');
     return this.casesService.unlockCase(id, user.id);
   }
+
+
   @UseGuards(JwtAuthGuard)
   @Get(':id/lawyers')
   async getLawyersForCase(@Req() req, @Param('id') id: string) {
@@ -162,4 +174,16 @@ export class CasesController {
    
   }
 
+
+  // generateAgreementDocument endpoint
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/approve-and-generate')
+  async approveAndGenerate(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    return this.casesService.generateAgreementDocument(
+      id,
+      (user.id ?? user._id)?.toString(),
+    );
+  }
 }

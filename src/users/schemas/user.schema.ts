@@ -36,7 +36,7 @@ export class User {
   @Prop({
     type: String,
     enum: ['user1', 'user2'],
-    default: null,
+    default: 'user1',
   })
   endUserType: string | null;
 
