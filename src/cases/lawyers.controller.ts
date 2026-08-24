@@ -22,7 +22,7 @@ export class LawyersController {
   @Post()
   async create(
     @Req() req,
-    @UploadedFile() file: Multer.File,
+    @UploadedFile() file: Express.Multer.File,
     @Body() body: any,
   ) {
     const payload: any = { ...body };
