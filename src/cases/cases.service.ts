@@ -144,11 +144,15 @@ export class CasesService {
       unlockedAt: null,
     } as SectionStatus;
   }
+<<<<<<< HEAD
+  private ensureSectionStatus(c: CaseDocument, section: string): SectionStatus {
+=======
   private ensureSectionStatus(
     c: CaseDocument,
     section: string,
   ): SectionStatus {
 
+>>>>>>> d88700c7082604a5e12096095228b2cf58e5faa7
     c.status = c.status || {};
 
     const statusAny = c.status as any;
@@ -388,8 +392,15 @@ export class CasesService {
     if (!c) throw new NotFoundException('Case not found');
 
     // enforce workflow state
+<<<<<<< HEAD
+    if (c.workflowStatus !== 'LAWYER') {
+      throw new ForbiddenException(
+        'Pre-questionnaire cannot be submitted: case not in LAWYER Selection state',
+      );
+=======
     if (c.workflowStatus !== CaseWorkflowStatus.LAWYERS_ASSIGNED) {
       throw new ForbiddenException('Pre-questionnaire cannot be submitted: case not in LAWYER Selection state');
+>>>>>>> d88700c7082604a5e12096095228b2cf58e5faa7
     }
 
     if (!Types.ObjectId.isValid(actorId))
@@ -988,8 +999,17 @@ LetsPrenup Team
       approval.user2ApprovedAt = now;
     }
     await c.save();
+<<<<<<< HEAD
+    if (
+      approval.user1Approved &&
+      approval.user2Approved &&
+      approval.caseManagerApproved
+    ) {
+      c.workflowStatus = 'LAWYER';
+=======
     if (approval.user1Approved && approval.user2Approved && approval.caseManagerApproved) {
       c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
+>>>>>>> d88700c7082604a5e12096095228b2cf58e5faa7
       c.fullyLocked = true;
       await c.save();
       await this.notifyUsersToCompletePreLawyer(c);
@@ -1029,8 +1049,17 @@ LetsPrenup Team
     approval.caseManagerApprovedAt = new Date();
     (approval as any).approvedBy = new Types.ObjectId(actorId);
     await c.save();
+<<<<<<< HEAD
+    if (
+      approval.user1Approved &&
+      approval.user2Approved &&
+      approval.caseManagerApproved
+    ) {
+      c.workflowStatus = 'LAWYER';
+=======
     if (approval.user1Approved && approval.user2Approved && approval.caseManagerApproved) {
       c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
+>>>>>>> d88700c7082604a5e12096095228b2cf58e5faa7
       c.fullyLocked = true;
       await c.save();
       await this.notifyUsersToCompletePreLawyer(c);
@@ -1113,8 +1142,16 @@ Wenup
     if (!['CM', 'PAID', 'LAWYER'].includes(normalized))
       throw new BadRequestException('Invalid status');
     if (normalized === 'CM') {
+<<<<<<< HEAD
+      c.workflowStatus = 'CM';
+      if (!c.assignedCaseManager)
+        c.assignedCaseManager = Types.ObjectId.isValid(actorId)
+          ? new Types.ObjectId(actorId)
+          : null;
+=======
       c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
       if (!c.assignedCaseManager) c.assignedCaseManager = Types.ObjectId.isValid(actorId) ? new Types.ObjectId(actorId) : null;
+>>>>>>> d88700c7082604a5e12096095228b2cf58e5faa7
       await c.save();
       await this.notifyCaseManagersOfNewCmCase(c);
       return c;
@@ -1377,6 +1414,174 @@ Wenup
     };
   }
 
+<<<<<<< HEAD
+  /* ---------------------------------------------------------------------- */
+  /* Agreement document generation                                          */
+  /* ---------------------------------------------------------------------- */
+
+  private humanizeKey(key: string): string {
+    return key
+      .replace(/([A-Z])/g, ' $1')
+      .replace(/^./, (s) => s.toUpperCase())
+      .trim();
+  }
+
+  private objectToLines(obj: any, prefix = ''): string[] {
+    const lines: string[] = [];
+    if (obj === null || obj === undefined) return lines;
+
+    if (Array.isArray(obj)) {
+      if (obj.length === 0) return lines;
+      obj.forEach((item, idx) => {
+        lines.push(`${prefix}Item ${idx + 1}:`);
+        lines.push(...this.objectToLines(item, prefix + '   '));
+      });
+      return lines;
+    }
+
+    if (typeof obj === 'object') {
+      for (const [key, value] of Object.entries(obj)) {
+        if (value === '' || value === null || value === undefined) continue;
+        if (key === 'id') continue;
+        if (typeof value === 'object') {
+          const nested = this.objectToLines(value, prefix + '   ');
+          if (nested.length > 0) {
+            lines.push(`${prefix}${this.humanizeKey(key)}:`);
+            lines.push(...nested);
+          }
+        } else {
+          lines.push(`${prefix}${this.humanizeKey(key)}: ${value}`);
+        }
+      }
+      return lines;
+    }
+
+    lines.push(`${prefix}${obj}`);
+    return lines;
+  }
+
+  private addFieldGroupsToDoc(sections: Paragraph[], groups: [string, any][]) {
+    for (const [label, data] of groups) {
+      sections.push(
+        new Paragraph({ text: label, heading: HeadingLevel.HEADING_2 }),
+      );
+      const lines = this.objectToLines(data);
+      if (lines.length === 0) {
+        sections.push(new Paragraph({ text: 'Not provided.' }));
+      } else {
+        lines.forEach((line) => sections.push(new Paragraph({ text: line })));
+      }
+    }
+  }
+
+  async generateAgreementDocument(
+    caseId: string,
+    actorId: string,
+  ): Promise<{ success: boolean; fileName: string; filePath: string }> {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    const c = await this.caseModel.findById(caseId).exec();
+    if (!c) throw new NotFoundException('Case not found');
+
+    if (!Types.ObjectId.isValid(actorId)) {
+      throw new BadRequestException('Invalid actor id');
+    }
+    const actorObjId = new Types.ObjectId(actorId);
+    const isOwner = c.owner?.toString() === actorObjId.toString();
+    const isInvited = c.invitedUser?.toString() === actorObjId.toString();
+    if (!isOwner && !isInvited) {
+      throw new ForbiddenException('Actor not part of this case');
+    }
+
+    const sections: Paragraph[] = [];
+
+    sections.push(
+      new Paragraph({
+        text: 'Prenuptial Agreement — Financial Disclosure Summary',
+        heading: HeadingLevel.TITLE,
+      }),
+      new Paragraph({ text: `Case ID: ${c._id}` }),
+      new Paragraph({
+        text: `Generated: ${new Date().toLocaleString('en-GB')}`,
+      }),
+      new Paragraph({ text: '' }),
+    );
+
+    const myInfo = (c as any).myInformation ?? {};
+    const partnerInfo = (c as any).partnerInformation ?? {};
+    const jointInfo = (c as any).jointInformation ?? {};
+
+    sections.push(
+      new Paragraph({
+        text: 'Party 1 (Owner) Information',
+        heading: HeadingLevel.HEADING_1,
+      }),
+    );
+    this.addFieldGroupsToDoc(sections, [
+      ['Personal Information', myInfo.personalInformation],
+      ['Legal Declaration', myInfo.legalDeclaration],
+      ['Family & Dependents', myInfo.familyAndDependents],
+      ['Individual Assets', myInfo.individualAssets],
+      ['Income & Revenue', myInfo.incomeAndRevenue],
+      ['Liabilities & Debts', myInfo.liabilitiesAndDebts],
+    ]);
+    sections.push(new Paragraph({ text: '' }));
+
+    sections.push(
+      new Paragraph({
+        text: 'Party 2 (Partner) Information',
+        heading: HeadingLevel.HEADING_1,
+      }),
+    );
+    this.addFieldGroupsToDoc(sections, [
+      ['Personal Information', partnerInfo.personalInformation],
+      ['Legal Declaration', partnerInfo.legalDeclaration],
+      ['Family & Dependents', partnerInfo.familyAndDependents],
+      ['Individual Assets', partnerInfo.individualAssets],
+      ['Income & Revenue', partnerInfo.incomeAndRevenue],
+      ['Liabilities & Debts', partnerInfo.liabilitiesAndDebts],
+    ]);
+    sections.push(new Paragraph({ text: '' }));
+
+    sections.push(
+      new Paragraph({
+        text: 'Joint Information',
+        heading: HeadingLevel.HEADING_1,
+      }),
+    );
+    this.addFieldGroupsToDoc(sections, [
+      ['Joint Assets', jointInfo.jointAssets],
+      ['Joint Income & Revenue', jointInfo.jointIncomeAndRevenue],
+      ['Joint Liabilities & Debts', jointInfo.jointLiabilitiesAndDebts],
+    ]);
+
+    const doc = new Document({
+      sections: [{ children: sections }],
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+
+    const outputDir = path.join(process.cwd(), 'generated-documents');
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    const fileName = `agreement-${caseId}-${Date.now()}.docx`;
+    const filePath = path.join(outputDir, fileName);
+    fs.writeFileSync(filePath, buffer);
+
+    (c as any).agreementDocument = {
+      fileName,
+      filePath,
+      generatedAt: new Date(),
+      approvedBy: actorObjId,
+    };
+    await c.save();
+
+    return { success: true, fileName, filePath };
+=======
   private determineWorkflowStatus(
     c: CaseDocument,
   ): string {
@@ -1440,5 +1645,6 @@ Wenup
     }
 
     return 'READY_FOR_SIGNATURE';
+>>>>>>> d88700c7082604a5e12096095228b2cf58e5faa7
   }
 }
