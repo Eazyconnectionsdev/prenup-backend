@@ -5,6 +5,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { CasesModule } from './cases/cases.module';
 import { MailModule } from './mail/mail.module';
+import { CaseManagerModule } from './cases/case-manager/case-manager.module';
 import { AdminModule } from './admin/admin.module';
 
 @Module({
@@ -18,6 +19,7 @@ import { AdminModule } from './admin/admin.module';
     CasesModule,
     MailModule,
     AdminModule,
+    CaseManagerModule
   ],
 })
 export class AppModule {}

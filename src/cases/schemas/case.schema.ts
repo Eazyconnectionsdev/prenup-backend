@@ -4,6 +4,27 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
 export type CaseDocument = Case & Document;
+export enum CaseWorkflowStatus {
+  NOT_PAID = 'NOT_PAID',
+
+  DRAFT = 'DRAFT',
+
+  COUPLE_SUBMITTED = 'COUPLE_SUBMITTED',
+
+  CM_APPROVED = 'CM_APPROVED',
+
+  PRE_LAWYER_PENDING = 'PRE_LAWYER_PENDING',
+
+  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
+
+  LEGAL_REVIEW = 'LEGAL_REVIEW',
+
+  READY_FOR_SIGNATURE = 'READY_FOR_SIGNATURE',
+
+  EXECUTED = 'EXECUTED',
+
+  ARCHIVED = 'ARCHIVED',
+}
 
 //
 // SECTION STATUS
@@ -300,6 +321,9 @@ export const IndependentLegalAdviceSchema =
 //
 // CASE
 //
+//
+// CASE
+//
 
 @Schema({
   timestamps: true,
@@ -309,6 +333,11 @@ export class Case {
     default: 'Untitled case',
   })
   title!: string;
+
+  @Prop({
+    default: false,
+  })
+  paymentCompleted?: boolean;
 
   @Prop({
     type: Object,
@@ -352,9 +381,9 @@ export class Case {
   })
   inviteTokenExpires?: Date | null;
 
-  //
-  // NEW QUESTIONNAIRE STRUCTURE
-  //
+  // =====================================================
+  // QUESTIONNAIRE DATA
+  // =====================================================
 
   @Prop({
     type: MyInformationSchema,
@@ -380,9 +409,9 @@ export class Case {
   })
   independentLegalAdvice!: IndependentLegalAdvice;
 
-  //
-  // LAWYER FLOW
-  //
+  // =====================================================
+  // PRE LAWYER QUESTIONNAIRE
+  // =====================================================
 
   @Prop({
     type: PreQuestionnaireSchema,
@@ -396,9 +425,9 @@ export class Case {
   })
   preQuestionnaireUser2!: PreQuestionnaire;
 
-  //
+  // =====================================================
   // APPROVAL
-  //
+  // =====================================================
 
   @Prop({
     type: ApprovalSchema,
@@ -406,19 +435,16 @@ export class Case {
   })
   approval?: Approval;
 
-  //
-  // STATUS
-  //
+  // =====================================================
+  // SECTION STATUS
+  // =====================================================
 
   @Prop({
     type: {
       myInformation: SectionStatusSchema,
-      partnerInformation:
-        SectionStatusSchema,
-      jointInformation:
-        SectionStatusSchema,
-      independentLegalAdvice:
-        SectionStatusSchema,
+      partnerInformation: SectionStatusSchema,
+      jointInformation: SectionStatusSchema,
+      independentLegalAdvice: SectionStatusSchema,
     },
     default: {},
   })
@@ -429,9 +455,9 @@ export class Case {
     independentLegalAdvice?: SectionStatus;
   };
 
-  //
+  // =====================================================
   // LOCKING
-  //
+  // =====================================================
 
   @Prop({
     default: false,
@@ -451,21 +477,28 @@ export class Case {
   })
   fullyLockedAt?: Date | null;
 
-  //
-  // WORKFLOW
-  //
+  // =====================================================
+  // CASE WORKFLOW
+  // =====================================================
+
+  @Prop({
+    default: false,
+  })
+  partnerInvited!: boolean;
 
   @Prop({
     type: String,
-    enum: [
-      'DRAFT',
-      'CM',
-      'PAID',
-      'LAWYER',
-    ],
-    default: 'DRAFT',
+    enum: Object.values(
+      CaseWorkflowStatus,
+    ),
+    default:
+      CaseWorkflowStatus.NOT_PAID,
   })
-  workflowStatus?: string;
+  workflowStatus!: CaseWorkflowStatus;
+
+  // =====================================================
+  // CASE MANAGER
+  // =====================================================
 
   @Prop({
     type: Types.ObjectId,
@@ -473,8 +506,198 @@ export class Case {
     default: null,
   })
   assignedCaseManager?: Types.ObjectId | null;
-}
 
+  @Prop({
+    default: false,
+  })
+  cmApproved?: boolean;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  cmApprovedAt?: Date | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
+    default: null,
+  })
+  cmApprovedBy?: Types.ObjectId | null;
+
+  @Prop({
+    type: String,
+    default: null,
+  })
+  cmReturnReason?: string | null;
+
+  // =====================================================
+  // CLIENT CONFIRMATION
+  // =====================================================
+
+  @Prop({
+    default: false,
+  })
+  p1Confirmed?: boolean;
+
+  @Prop({
+    default: false,
+  })
+  p2Confirmed?: boolean;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  p1ConfirmedAt?: Date | null;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  p2ConfirmedAt?: Date | null;
+
+  // =====================================================
+  // LAWYERS
+  // =====================================================
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'Lawyer',
+    default: null,
+  })
+  assignedLawyerP1?: Types.ObjectId | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'Lawyer',
+    default: null,
+  })
+  assignedLawyerP2?: Types.ObjectId | null;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  lawyersAssignedAt?: Date | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
+    default: null,
+  })
+  lawyersAssignedBy?: Types.ObjectId | null;
+
+  // =====================================================
+  // PRIORITY
+  // =====================================================
+
+  @Prop({
+    enum: [
+      'LOW',
+      'MEDIUM',
+      'HIGH',
+      'URGENT',
+    ],
+    default: 'MEDIUM',
+  })
+  priority!: string;
+
+  // =====================================================
+  // LEGAL STAGE
+  // =====================================================
+
+  @Prop({
+    default: false,
+  })
+  p1LawyerApproved?: boolean;
+
+  @Prop({
+    default: false,
+  })
+  p2LawyerApproved?: boolean;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  p1LawyerApprovedAt?: Date | null;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  p2LawyerApprovedAt?: Date | null;
+
+  // =====================================================
+  // AGREEMENT STAGE
+  // =====================================================
+
+  @Prop({
+    default: false,
+  })
+  executionPackGenerated?: boolean;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  executionPackGeneratedAt?: Date | null;
+
+  @Prop({
+    default: false,
+  })
+  readyForArchive?: boolean;
+
+  // =====================================================
+  // COMPLETION
+  // =====================================================
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  completedAt?: Date | null;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  archivedAt?: Date | null;
+
+  // =====================================================
+  // VERSION TRACKING
+  // =====================================================
+
+  @Prop({
+    default: 1,
+  })
+  currentVersion!: number;
+
+  @Prop({
+    default: 0,
+  })
+  totalVersions!: number;
+
+  // =====================================================
+  // QUICK DASHBOARD STATS
+  // =====================================================
+
+  @Prop({
+    default: 0,
+  })
+  totalNotes!: number;
+
+  @Prop({
+    default: 0,
+  })
+  totalDocuments!: number;
+
+  @Prop({
+    default: 0,
+  })
+  totalTimelineEntries!: number;
+}
 export const CaseSchema =
   SchemaFactory.createForClass(
     Case,
