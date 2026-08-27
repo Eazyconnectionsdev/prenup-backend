@@ -159,10 +159,52 @@ export class CasesService {
         ?.submitted
     );
   }
-  async create(ownerId: string, title?: string): Promise<CaseDocument> {
-    const c = new this.caseModel({ title: title || 'Untitled case', owner: new Types.ObjectId(ownerId), workflowStatus: 'DRAFT' });
+
+  async create(
+    ownerId: string,
+    title?: string,
+  ): Promise<CaseDocument> {
+
+    const c = new this.caseModel({
+      title:
+        title || 'Untitled case',
+
+      owner:
+        new Types.ObjectId(ownerId),
+
+      workflowStatus:
+        CaseWorkflowStatus.NOT_PAID,
+
+      paymentCompleted: false,
+    });
+
     return c.save();
   }
+  async markPaymentCompleted(
+    caseId: string,
+    actorId: string,
+  ) {
+
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    c.paymentCompleted = true;
+
+    c.workflowStatus =
+      CaseWorkflowStatus.DRAFT;
+
+    await c.save();
+
+    return c;
+  }
+
+
   async findById(id: string, populate = false): Promise<CaseDocument | null> {
     if (!Types.ObjectId.isValid(id)) return null;
     const q = this.caseModel.findById(id);
@@ -508,265 +550,6 @@ ${taskLines.join('\n\n')}`;
   }
 
 
-  // selectLawyer
-  async selectLawyer(caseId: string, actorId: string, lawyerId: string, force = false, message?: string): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    if (!Types.ObjectId.isValid(lawyerId)) throw new BadRequestException('Invalid lawyer id');
-    if (!Types.ObjectId.isValid(actorId)) throw new BadRequestException('Invalid actor id');
-
-    const c = await this.caseModel.findById(caseId).exec();
-    if (!c) throw new NotFoundException('Case not found');
-
-    if (
-      !c.fullyLocked ||
-      !this.areAllSectionsSubmitted(c)
-    ) {
-      throw new BadRequestException(
-        'Lawyer selection is allowed only after all sections are submitted and the case is fully locked',
-      );
-    }
-
-    const actorObjId = new Types.ObjectId(actorId);
-    const extractId = (val: any): Types.ObjectId | null => {
-      if (!val) return null;
-      if (val instanceof Types.ObjectId) return val;
-      if (typeof val === 'object' && val._id) {
-        return val._id instanceof Types.ObjectId ? val._id : new Types.ObjectId(val._id.toString());
-      }
-      if (typeof val === 'string' && Types.ObjectId.isValid(val)) return new Types.ObjectId(val);
-      return null;
-    };
-
-    const ownerId = extractId(c.owner);
-    const invitedId = extractId(c.invitedUser);
-    const equalsId = (idA: Types.ObjectId | null, idB: Types.ObjectId) => {
-      if (!idA) return false;
-      if (typeof (idA as any).equals === 'function') return (idA as any).equals(idB);
-      return idA.toString() === idB.toString();
-    };
-
-    const isOwner = equalsId(ownerId, actorObjId);
-    const isInvited = equalsId(invitedId, actorObjId);
-    if (!isOwner && !isInvited) throw new ForbiddenException('Actor not part of this case');
-
-    const p1Submitted = !!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted);
-    const p2Submitted = !!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted);
-    if (!p1Submitted || !p2Submitted) throw new BadRequestException('Both parties must submit their pre-questionnaires before selecting lawyers');
-
-    const lawyerDoc = await this.lawyerModel.findById(lawyerId).exec();
-    if (!lawyerDoc) throw new NotFoundException('Lawyer not found');
-
-    if (isOwner) {
-      const otherSelected = c.preQuestionnaireUser2?.selectedLawyer?.toString();
-      if (otherSelected === lawyerId && !force) throw new BadRequestException('This lawyer has already been chosen by the other party');
-      if (!c.preQuestionnaireUser1) c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
-      c.preQuestionnaireUser1.selectedLawyer = new Types.ObjectId(lawyerId);
-      (c.preQuestionnaireUser1 as any).selectedAt = new Date();
-    } else {
-      const otherSelected = c.preQuestionnaireUser1?.selectedLawyer?.toString();
-      if (otherSelected === lawyerId && !force) throw new BadRequestException('This lawyer has already been chosen by the other party');
-      if (!c.preQuestionnaireUser2) c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
-      c.preQuestionnaireUser2.selectedLawyer = new Types.ObjectId(lawyerId);
-      (c.preQuestionnaireUser2 as any).selectedAt = new Date();
-    }
-
-    await c.save();
-
-    // reload populated doc for email resolution
-    const populated = await this.caseModel.findById(c._id).populate('owner invitedUser').exec();
-
-    // local resolver (same as above)
-    const resolveEmailLocal = (ref: any, fallback?: string): string | null => {
-      try {
-        if (!ref && fallback) return fallback;
-        if (!ref) return null;
-        if (typeof ref === 'string') {
-          if (ref.includes('@')) return ref.trim();
-          return null;
-        }
-        if (typeof ref === 'object') {
-          const maybe = (ref as any).email;
-          if (typeof maybe === 'string' && maybe.trim()) return maybe.trim();
-          if ((ref as any).invitedEmail && typeof (ref as any).invitedEmail === 'string' && (ref as any).invitedEmail.includes('@')) return (ref as any).invitedEmail.trim();
-        }
-        return null;
-      } catch (err) {
-        return fallback ?? null;
-      }
-    };
-
-    const personName = (ref: any, fallback?: string) => {
-      if (!ref) return fallback ?? 'Participant';
-      return (ref.fullName || ref.name || ((ref.firstName || ref.lastName) ? `${ref.firstName ?? ''} ${ref.lastName ?? ''}`.trim() : ref.email || fallback || 'Participant'));
-    };
-
-    const ownerName = personName(populated?.owner, 'Owner');
-    const invitedName = personName(populated?.invitedUser ?? 'Invited user');
-
-    const taskStatus = (done: boolean) => done ? 'COMPLETED' : 'PENDING';
-    const taskLines = [
-      `Task 1 - ${ownerName} Pre-Lawyer Questionnaire\n\nStatus: ${taskStatus(!!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.submitted))}`,
-      `Task 2 - ${ownerName} Lawyer Selection\n\nStatus: ${taskStatus(!!(c.preQuestionnaireUser1 && c.preQuestionnaireUser1.selectedLawyer))}`,
-      `Task 3 - ${invitedName} Pre-Lawyer Questionnaire\n\nStatus: ${taskStatus(!!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted))}`,
-      `Task 4 - ${invitedName} Lawyer Selection\n\nStatus: ${taskStatus(!!(c.preQuestionnaireUser2 && c.preQuestionnaireUser2.selectedLawyer))}`,
-    ];
-
-    const actorDisplayName = isOwner ? ownerName : invitedName;
-    const subject = `Agreement update — case ${c._id}`;
-    const bodyText = `Hello!
-
-${actorDisplayName} has selected their lawyer.
-
-Thank you for completing all steps. You will be connected with your lawyers within 15 minutes.
-
-${taskLines.join('\n\n')}`;
-
-    // send same formatted message to both participants
-    const ownerEmail = resolveEmailLocal(populated?.owner);
-    const invitedEmail = resolveEmailLocal(populated?.invitedUser, populated?.invitedEmail ?? undefined);
-    const recipients = Array.from(new Set([ownerEmail, invitedEmail].filter(Boolean) as string[]));
-
-    if (recipients.length === 0) {
-      console.warn(`No recipient emails resolved for case ${c._id} after lawyer selection`);
-    } else {
-      await Promise.all(recipients.map(async (r) => {
-        try {
-          if (typeof (this.mailService as any).sendMail === 'function') {
-            await (this.mailService as any).sendMail(r, subject, bodyText);
-          } else if (typeof (this.mailService as any).sendRaw === 'function') {
-            await (this.mailService as any).sendRaw({ to: r, subject, text: bodyText });
-          } else {
-            console.warn('mailService send methods not available; skipping sending emails to participants');
-          }
-        } catch (err) {
-          console.error(`Failed to send lawyer-selection notification to ${r} for case ${c._id}`, err);
-        }
-      }));
-    }
-
-    // actor-specific confirmation (keeps your original content)
-    try {
-      const actorEmailDirect = isOwner ? resolveEmailLocal(populated?.owner) : resolveEmailLocal(populated?.invitedUser, populated?.invitedEmail ?? undefined);
-      if (actorEmailDirect) {
-        const missingSections: string[] =
-          [];
-
-        if (
-          !c.status?.myInformation
-            ?.submitted
-        ) {
-          missingSections.push(
-            'My Information',
-          );
-        }
-
-        if (
-          !c.status?.partnerInformation
-            ?.submitted
-        ) {
-          missingSections.push(
-            'Partner Information',
-          );
-        }
-
-        if (
-          !c.status?.jointInformation
-            ?.submitted
-        ) {
-          missingSections.push(
-            'Joint Information',
-          );
-        }
-
-        if (
-          !c.status
-            ?.independentLegalAdvice
-            ?.submitted
-        ) {
-          missingSections.push(
-            'Independent Legal Advice',
-          );
-        }
-        const subjectActor = `Agreement status: Second step completed — case ${c._id}`;
-        const bodyTextActor = `Hello,
-
-You have selected a lawyer for case ${c._id}.
-Completed: Select lawyer (second step).
-Remaining required sections:
-${missingSections.length > 0
-            ? missingSections.join(', ')
-            : 'None'
-          }
-Your selected lawyer:
-${(lawyerDoc as any).name ?? 'N/A'}${this.getLawyerContactEmail(lawyerDoc) ? `\nEmail: ${this.getLawyerContactEmail(lawyerDoc)}` : ''}
-
-Regards,
-LetsPrenup Team
-`;
-        if (typeof (this.mailService as any).sendMail === 'function') {
-          await (this.mailService as any).sendMail(actorEmailDirect, subjectActor, bodyTextActor);
-        }
-      }
-    } catch (err) {
-      console.error(`Actor-specific lawyer confirmation failed for case ${c._id}`, err);
-    }
-
-    // notify selected lawyer (existing behavior)
-    try {
-      const lawyerEmail = this.getLawyerContactEmail(lawyerDoc);
-      if (lawyerEmail) {
-        const clientInfo = isOwner ? { role: 'Owner (P1)', email: (c as any).owner?.email ?? 'N/A' } : { role: 'Invited user (P2)', email: c.invitedEmail ?? (c as any).invitedUser?.email ?? 'N/A' };
-        const appUrl = this.config.get('APP_SERVER_URL') || '';
-        const loginUrl = `${appUrl}/auth/login`;
-        const subjectLawyer = `Client introduction — new client via LetsPrenup (case ${c._id})`;
-        const bodyLawyer = `Hello ${(lawyerDoc as any).name ?? ''},
-
-You have been selected as the lawyer for a client via LetsPrenup.
-
-Case: ${c._id}
-Client role: ${clientInfo.role}
-Client email: ${clientInfo.email}
-
-Client message (if any):
-${message || '(no message provided)'}
-
-Please login to LetsPrenup to view the case and begin the process:
-${loginUrl}
-
-Regards,
-LetsPrenup Team
-`;
-        if (typeof (this.mailService as any).sendMail === 'function') {
-          await (this.mailService as any).sendMail(lawyerEmail, subjectLawyer, bodyLawyer);
-        }
-      }
-    } catch (err) {
-      console.error(`Failed to send lawyer intro to selected lawyer for case ${c._id}`, err);
-    }
-
-    return c;
-  }
-
-
-  private getLawyerContactEmail(lawyerDoc: LawyerDocument | any): string | null {
-    try { return (lawyerDoc as any).directEmail ?? (lawyerDoc as any).publicEmail ?? null; } catch (err) { return null; }
-  }
-  private getLawyerContactPhone(lawyerDoc: LawyerDocument | any): string | null {
-    try { return (lawyerDoc as any).directPhone ?? (lawyerDoc as any).publicPhone ?? null; } catch (err) { return null; }
-  }
-  async isLawyerSelected(caseId: string, lawyerId: string): Promise<boolean> {
-    const c = await this.caseModel.findById(caseId).select('preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer').lean().exec();
-    if (!c) throw new NotFoundException('Case not found');
-    const l1 = c.preQuestionnaireUser1?.selectedLawyer?.toString();
-    const l2 = c.preQuestionnaireUser2?.selectedLawyer?.toString();
-    return l1 === lawyerId || l2 === lawyerId;
-  }
-  async listLawyers(limit = 50, page = 1) {
-    const skip = (page - 1) * limit;
-    const docs = await this.lawyerModel.find().skip(skip).limit(limit).lean().exec();
-    const total = await this.lawyerModel.countDocuments().exec();
-    return { total, docs };
-  }
   async setInviteCredentials(caseId: string, creds: { email: string; password: string; createdAt: Date }) {
     if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
     return this.caseModel.findByIdAndUpdate(caseId, { inviteCredentials: creds }, { new: true, useFindAndModify: false }).exec();
@@ -816,53 +599,103 @@ LetsPrenup Team
     if (!c.approval) (c as any).approval = {};
     return (c as any).approval as Approval;
   }
-  async approveCaseByUser(caseId: string, actorId: string): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    if (
-      !c.fullyLocked ||
-      !this.areAllSectionsSubmitted(c)
-    ) {
-      throw new BadRequestException(
-        'Lawyer selection is allowed only after all sections are submitted and the case is fully locked',
+  async approveCaseByUser(
+    caseId: string,
+    actorId: string,
+  ): Promise<CaseDocument> {
+
+    const c =
+      await this.caseModel.findById(
+        caseId,
+      );
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
       );
     }
-    const actorObjId = new Types.ObjectId(actorId);
-    const isOwner = c.owner?.toString() === actorObjId.toString();
-    const isInvited = c.invitedUser?.toString() === actorObjId.toString();
-    if (!isOwner && !isInvited) throw new ForbiddenException('Actor not part of this case');
+
+    const approval =
+      this.ensureApprovalObj(c);
+
+    const actorObjId =
+      new Types.ObjectId(actorId);
+
+    const isOwner =
+      c.owner?.toString() ===
+      actorObjId.toString();
+
+    const isInvited =
+      c.invitedUser?.toString() ===
+      actorObjId.toString();
+
+    if (!isOwner && !isInvited) {
+      throw new ForbiddenException(
+        'Not part of case',
+      );
+    }
+
     const now = new Date();
-    const approval = this.ensureApprovalObj(c);
+
     if (isOwner) {
-      approval.user1Approved = true;
-      approval.user1ApprovedAt = now;
+      approval.user1Approved =
+        true;
+
+      approval.user1ApprovedAt =
+        now;
     } else {
-      approval.user2Approved = true;
-      approval.user2ApprovedAt = now;
+      approval.user2Approved =
+        true;
+
+      approval.user2ApprovedAt =
+        now;
     }
-    await c.save();
-    if (approval.user1Approved && approval.user2Approved && approval.caseManagerApproved) {
-      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
+
+    if (
+      approval.user1Approved &&
+      approval.user2Approved
+    ) {
+      c.workflowStatus =
+        CaseWorkflowStatus.COUPLE_SUBMITTED;
+
       c.fullyLocked = true;
-      await c.save();
-      await this.notifyUsersToCompletePreLawyer(c);
+
+      c.fullyLockedAt =
+        now;
     }
-    return c;
-  }
-  async approveCaseByLawyer(caseId: string, lawyerId: string): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId) || !Types.ObjectId.isValid(lawyerId)) throw new BadRequestException('Invalid ids');
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    const selected = c.preQuestionnaireUser1?.selectedLawyer?.toString() === lawyerId || c.preQuestionnaireUser2?.selectedLawyer?.toString() === lawyerId;
-    if (!selected) throw new ForbiddenException('Lawyer not selected for this case');
-    const approval = this.ensureApprovalObj(c);
-    approval.lawyerApproved = true;
-    approval.lawyerApprovedAt = new Date();
-    approval.approvedLawyer = new Types.ObjectId(lawyerId);
+
     await c.save();
+
     return c;
   }
+
+  async rejectCaseByUser(
+    caseId: string,
+    actorId: string,
+    reason: string,
+  ) {
+    const c =
+      await this.caseModel.findById(
+        caseId,
+      );
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    c.fullyLocked = false;
+
+    c.workflowStatus =
+      CaseWorkflowStatus.DRAFT;
+
+    await c.save();
+
+    return c;
+  }
+
+
   async approveCaseByManager(caseId: string, actorId: string): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId)) throw new BadRequestException('Invalid case id');
     const c = await this.caseModel.findById(caseId);
@@ -1053,26 +886,6 @@ Wenup
       }
     }
   }
-  private resolveEmailForActor(c: CaseDocument, actorObjId: Types.ObjectId | null): string | null {
-    try {
-      if (!actorObjId) return null;
-      if (c.owner && typeof (c.owner as any).toString === 'function') {
-        if ((c.owner as any).toString() === actorObjId.toString()) {
-          if ((c as any).owner && typeof (c as any).owner.email === 'string') return (c as any).owner.email;
-        }
-      }
-      if (c.invitedUser && typeof (c.invitedUser as any).toString === 'function') {
-        if ((c.invitedUser as any).toString() === actorObjId.toString()) {
-          if ((c as any).invitedUser && typeof (c as any).invitedUser.email === 'string') return (c as any).invitedUser.email;
-          if (c.invitedEmail) return c.invitedEmail;
-        }
-      }
-      if (c.invitedEmail) {
-        if (c.invitedUser == null) return c.invitedEmail;
-      }
-      return null;
-    } catch (err) { return null; }
-  }
 
   async getQuestionnaireSection(
     caseId: string,
@@ -1166,66 +979,33 @@ Wenup
 
   private determineWorkflowStatus(
     c: CaseDocument,
-  ): string {
+  ): CaseWorkflowStatus {
 
     if (!c.paymentCompleted) {
-      return 'NOT_PAID';
+      return CaseWorkflowStatus.NOT_PAID;
     }
 
     if (
-      !this.areAllSectionsSubmitted(c)
+      !c.approval?.user1Approved ||
+      !c.approval?.user2Approved
     ) {
-      return 'DRAFT';
-    }
-
-    const usersApproved =
-      c.approval?.user1Approved &&
-      c.approval?.user2Approved;
-
-    if (!usersApproved) {
-      return 'COUPLE_SUBMITTED';
+      return CaseWorkflowStatus.DRAFT;
     }
 
     if (
-      !c.approval?.caseManagerApproved
+      c.approval.user1Approved &&
+      c.approval.user2Approved &&
+      !c.approval.caseManagerApproved
     ) {
-      return 'CM_APPROVED';
-    }
-
-    const p1Submitted =
-      c.preQuestionnaireUser1?.submitted;
-
-    const p2Submitted =
-      c.preQuestionnaireUser2?.submitted;
-
-    if (
-      !p1Submitted ||
-      !p2Submitted
-    ) {
-      return 'PRE_LAWYER_PENDING';
-    }
-
-    const p1Lawyer =
-      c.preQuestionnaireUser1
-        ?.selectedLawyer;
-
-    const p2Lawyer =
-      c.preQuestionnaireUser2
-        ?.selectedLawyer;
-
-    if (
-      !p1Lawyer ||
-      !p2Lawyer
-    ) {
-      return 'LAWYERS_ASSIGNED';
+      return CaseWorkflowStatus.COUPLE_SUBMITTED;
     }
 
     if (
-      !c.approval?.lawyerApproved
+      c.approval.caseManagerApproved
     ) {
-      return 'LEGAL_REVIEW';
+      return CaseWorkflowStatus.CM_APPROVED;
     }
 
-    return 'READY_FOR_SIGNATURE';
+    return CaseWorkflowStatus.DRAFT;
   }
 }
