@@ -13,16 +13,25 @@ export enum CaseWorkflowStatus {
 
   CM_APPROVED = 'CM_APPROVED',
 
+  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
+
   PRE_LAWYER_PENDING = 'PRE_LAWYER_PENDING',
 
-  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
+  PRE_LAWYER_COMPLETED = 'PRE_LAWYER_COMPLETED',
+
+  LAWYER_CLIENT_CONFIRMATION =
+  'LAWYER_CLIENT_CONFIRMATION',
 
   LAWYER_REVIEW = 'LAWYER_REVIEW',
 
   LAWYER_REVIEW_COMPLETED =
-    'LAWYER_REVIEW_COMPLETED',
+  'LAWYER_REVIEW_COMPLETED',
 
-  ILA_PENDING = 'ILA_PENDING',
+  LAWYER_ILA_PENDING =
+  'LAWYER_ILA_PENDING',
+
+  LAWYER_SIGNOFF_COMPLETE =
+  'LAWYER_SIGNOFF_COMPLETE',
 
   COMPLETED = 'COMPLETED',
 
@@ -702,6 +711,146 @@ export class Case {
     default: 0,
   })
   totalTimelineEntries!: number;
+
+
+
+  // =====================================================
+// ILA
+// =====================================================
+
+@Prop({
+  default: false,
+})
+p1ILACompleted?: boolean;
+
+@Prop({
+  default: false,
+})
+p2ILACompleted?: boolean;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+p1ILACompletedAt?: Date | null;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+p2ILACompletedAt?: Date | null;
+
+@Prop({
+  type: String,
+  default: null,
+})
+p1ILAFile?: string | null;
+
+@Prop({
+  type: String,
+  default: null,
+})
+p2ILAFile?: string | null;
+
+
+// =====================================================
+// LAWYER SIGNOFF
+// =====================================================
+
+@Prop({
+  default: false,
+})
+p1LawyerSigned?: boolean;
+
+@Prop({
+  default: false,
+})
+p2LawyerSigned?: boolean;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+p1LawyerSignedAt?: Date | null;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+p2LawyerSignedAt?: Date | null;
+
+@Prop({
+  default: false,
+})
+dualLawyerSignoffCompleted?: boolean;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+dualLawyerSignoffCompletedAt?: Date | null;
+
+
+// =====================================================
+// FINAL CLIENT CONFIRMATION
+// =====================================================
+
+@Prop({
+  default: false,
+})
+finalP1Confirmed?: boolean;
+
+@Prop({
+  default: false,
+})
+finalP2Confirmed?: boolean;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+finalP1ConfirmedAt?: Date | null;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+finalP2ConfirmedAt?: Date | null;
+
+
+// =====================================================
+// CURRENT AGREEMENT
+// =====================================================
+
+@Prop({
+  type: String,
+  default: null,
+})
+currentAgreementVersion?: string | null;
+
+@Prop({
+  type: Types.ObjectId,
+  ref: 'AgreementVersion',
+  default: null,
+})
+currentAgreementId?: Types.ObjectId | null;
+
+// =====================================================
+// Lawyer review tracking
+// =====================================================
+
+
+@Prop({
+  default: false,
+})
+lawyerReviewCompleted?: boolean;
+
+@Prop({
+  type: Date,
+  default: null,
+})
+lawyerReviewCompletedAt?: Date | null;
+
 }
 export const CaseSchema =
   SchemaFactory.createForClass(
