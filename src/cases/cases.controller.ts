@@ -3,6 +3,7 @@ import { Body, Controller, ForbiddenException, Get, Param, Post, Req, UseGuards,
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { CasesService } from './cases.service';
 import { CreateCaseDto } from './dto/create-case.dto';
+import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { LawyersService } from './lawyer.service';
 
 @Controller('cases')
@@ -41,19 +42,49 @@ export class CasesController {
     if (!c) throw new NotFoundException('Case not found');
 
     return c;
-  }
-  @UseGuards(JwtAuthGuard)
+  } 
+  
+   @UseGuards(JwtAuthGuard)
   @Post(':id/invite')
-  async invite(@Req() req, @Param('id') id: string, @Body('email') email: string) {
+  async invite(
+    @Req() req,
+    @Param('id') id: string,
+    @Body() dto: InvitePartnerDto,
+  ) {
+    console.log('RAW BODY:', req.body);
+8
+console.log('DTO:', dto);
+
+
     const user = this.ensureUser(req);
+
     const c = await this.casesService.findById(id);
-    if (!c) throw new NotFoundException('Case not found');
-    const isPrivileged = this.isPrivilegedRole(user.role);
-    const userIdStr = (user.id ?? user._id)?.toString();
-    if (!(isPrivileged || c.owner?.toString() === userIdStr)) {
-      throw new ForbiddenException('Forbidden');
+
+    if (!c) {
+      throw new NotFoundException('Case not found');
     }
-    return this.casesService.invite(id, user.id, email);
+
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    const userIdStr =
+      (user.id ?? user._id)?.toString();
+
+    if (
+      !(
+        isPrivileged ||
+        c.owner?.toString() === userIdStr
+      )
+    ) {
+      throw new ForbiddenException(
+        'Forbidden',
+      );
+    }
+
+    return this.casesService.invite(
+      id,
+      user.id,
+      dto,
+    );
   }
   @UseGuards(JwtAuthGuard)
   @Post(':id/attach-invited')
@@ -167,7 +198,7 @@ export class CasesController {
         reason,
       );
   }
-  
+
   @UseGuards(JwtAuthGuard)
   @Get(':id/status')
   async getStatus(

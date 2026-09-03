@@ -35,14 +35,27 @@ export class AgreementVersion {
     required: true,
   })
   fileUrl!: string;
-
+  
   @Prop()
   notes?: string;
+
+  @Prop()
+  amendmentSummary?: string;
 
   @Prop({
     default: false,
   })
   isMaster!: boolean;
+
+  @Prop({
+    default: false,
+  })
+  isCurrent!: boolean;
+
+  @Prop({
+    default: false,
+  })
+  superseded!: boolean;
 
   @Prop({
     type: Types.ObjectId,

@@ -15,6 +15,7 @@ import {
 
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { MailService } from '../mail/mail.service';
+import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 
 @Injectable()
 export class CasesService {
@@ -231,24 +232,100 @@ export class CasesService {
     c.inviteTokenExpires = null;
     return c.save();
   }
-  async invite(caseId: string, inviterId: string, inviteEmail: string) {
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + Number(this.config.get('INVITE_TOKEN_EXPIRY_HOURS') || 72) * 3600 * 1000);
-    c.invitedEmail = inviteEmail.toLowerCase();
-    c.inviteToken = token;
-    c.inviteTokenExpires = expires;
-    c.partnerInvited = true;
-    await c.save();
-    const inviteUrl = `${this.config.get('APP_SERVER_URL')}/auth/accept-invite?token=${token}&caseId=${c._id}&email=${encodeURIComponent(inviteEmail)}`;
-    if (typeof (this.mailService as any).sendInvite === 'function') {
-      await (this.mailService as any).sendInvite(inviteEmail, inviteUrl);
-    } else if (typeof (this.mailService as any).sendMail === 'function') {
-      await (this.mailService as any).sendMail(inviteEmail, `You are invited to a Wenup case`, `You have been invited. Accept using: ${inviteUrl}`);
-    }
-    return { inviteUrl };
+
+
+  
+  async invite(
+  caseId: string,
+  inviterId: string,
+  dto: InvitePartnerDto,
+) {
+  const c = await this.caseModel.findById(caseId);
+
+  if (!c) {
+    throw new NotFoundException(
+      'Case not found',
+    );
   }
+
+  const token =
+    crypto.randomBytes(32).toString(
+      'hex',
+    );
+
+  const expires = new Date(
+    Date.now() +
+      Number(
+        this.config.get(
+          'INVITE_TOKEN_EXPIRY_HOURS',
+        ) || 72,
+      ) *
+        3600 *
+        1000,
+  );
+
+  c.invitedEmail =
+    dto.email;
+
+  c.partnerInvited = true;
+
+  c.inviteToken = token;
+
+  c.inviteTokenExpires = expires;
+
+  c.partnerInviteDetails = {
+    firstName: dto.firstName,
+    lastName: dto.lastName,
+    email: dto.email,
+    mobileNumber:
+      dto.mobileNumber,
+    relationshipStatus:
+      dto.relationshipStatus,
+    targetWeddingDate:
+      dto.targetWeddingDate,
+    personalMessage:
+      dto.personalMessage,
+  };
+
+  await c.save();
+
+  const params =
+    new URLSearchParams({
+      token,
+      caseId: c._id.toString(),
+      email: dto.email,
+      firstName:
+        dto.firstName || '',
+      lastName:
+        dto.lastName || '',
+      mobileNumber:
+        dto.mobileNumber || '',
+      relationshipStatus:
+        dto.relationshipStatus ||
+        '',
+      targetWeddingDate:
+        dto.targetWeddingDate
+          ? new Date(
+              dto.targetWeddingDate,
+            ).toISOString()
+          : '',
+      personalMessage:
+        dto.personalMessage || '',
+    });
+
+  const inviteUrl =
+    `${this.config.get('APP_BASE_URL')}/register-partner?${params.toString()}`;
+console.log("dto.email", dto.email)
+  await this.mailService.sendInvite(
+    dto.email,
+    inviteUrl,
+  );
+
+  return {
+    inviteUrl,
+  };
+}
+
   async updateQuestionnaireStep(
     caseId: string,
     stepName: string,

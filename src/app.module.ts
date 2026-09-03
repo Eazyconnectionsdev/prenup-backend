@@ -5,6 +5,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { CasesModule } from './cases/cases.module';
 import { MailModule } from './mail/mail.module';
+import { LawyerModule } from './cases/lawyer-manager/lawyer.module';
 import { CaseManagerModule } from './cases/case-manager/case-manager.module';
 import { AdminModule } from './admin/admin.module';
 
@@ -19,7 +20,8 @@ import { AdminModule } from './admin/admin.module';
     CasesModule,
     MailModule,
     AdminModule,
-    CaseManagerModule
+    CaseManagerModule,
+    LawyerModule
   ],
 })
 export class AppModule {}
