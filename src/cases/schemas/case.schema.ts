@@ -4,6 +4,42 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
 export type CaseDocument = Case & Document;
+
+@Schema({ _id: false })
+export class PartnerInviteDetails {
+  @Prop({ default: null })
+  firstName?: string;
+
+  @Prop({ default: null })
+  lastName?: string;
+
+  @Prop({ default: null })
+  email?: string;
+
+  @Prop({ default: null })
+  mobileNumber?: string;
+
+  @Prop({
+    enum: ['Fiancé', 'Fiancée', 'Partner'],
+    default: null,
+  })
+  relationshipStatus?: string;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  targetWeddingDate?: Date | null;
+
+  @Prop({ default: null })
+  personalMessage?: string;
+}
+
+export const PartnerInviteDetailsSchema =
+  SchemaFactory.createForClass(PartnerInviteDetails);
+
+
+
 export enum CaseWorkflowStatus {
   NOT_PAID = 'NOT_PAID',
 
@@ -850,6 +886,12 @@ lawyerReviewCompleted?: boolean;
   default: null,
 })
 lawyerReviewCompletedAt?: Date | null;
+
+@Prop({
+  type: PartnerInviteDetailsSchema,
+  default: {},
+})
+partnerInviteDetails?: PartnerInviteDetails;
 
 }
 export const CaseSchema =
