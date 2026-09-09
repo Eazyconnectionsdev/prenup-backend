@@ -6,6 +6,8 @@ import * as bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { User, UserDocument } from './schemas/user.schema';
+import { NotFoundException } from '@nestjs/common';
+import { UpdateUserProfileDto } from './interface/update-user-profile.dto';
 
 @Injectable()
 export class UsersService {
@@ -185,4 +187,22 @@ export class UsersService {
     }
     return result;
   }
+
+
+async updateProfile(
+  userId: string,
+  updateData: UpdateUserProfileDto,
+) {
+  const user = await this.userModel.findByIdAndUpdate(
+    userId,
+    { $set: updateData },
+    { new: true },
+  ).select('-passwordHash');
+
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  return user;
+}
 }

@@ -15,6 +15,7 @@ import {
   SectionStatus,
   PreQuestionnaire,
   Approval,
+  CaseWorkflowStatus
 } from './schemas/case.schema';
 
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
@@ -131,6 +132,7 @@ export class CasesService {
       field: 'reviewAndSign',
     },
   };
+
   private defaultSectionStatus(): SectionStatus {
     return {
       submitted: false,
@@ -143,7 +145,12 @@ export class CasesService {
       unlockedAt: null,
     } as SectionStatus;
   }
-  private ensureSectionStatus(c: CaseDocument, section: string): SectionStatus {
+
+  private ensureSectionStatus(
+    c: CaseDocument,
+    section: string,
+  ): SectionStatus {
+
     c.status = c.status || {};
 
     const statusAny = c.status as any;
@@ -154,6 +161,7 @@ export class CasesService {
 
     return statusAny[section] as SectionStatus;
   }
+
   private makeEmptyPreQuestionnaire(): PreQuestionnaire {
     return {
       answers: [],
@@ -166,6 +174,7 @@ export class CasesService {
       lockedAt: null,
     } as PreQuestionnaire;
   }
+
   public areAllSectionsSubmitted(c: CaseDocument): boolean {
     return !!(
       c.status?.myInformation?.submitted &&
@@ -174,6 +183,74 @@ export class CasesService {
       c.status?.independentLegalAdvice?.submitted
     );
   }
+
+  private determineWorkflowStatus(
+    c: CaseDocument,
+  ): string {
+
+    if (!c.paymentCompleted) {
+      return 'NOT_PAID';
+    }
+
+    if (
+      !this.areAllSectionsSubmitted(c)
+    ) {
+      return 'DRAFT';
+    }
+
+    const usersApproved =
+      c.approval?.user1Approved &&
+      c.approval?.user2Approved;
+
+    if (!usersApproved) {
+      return 'COUPLE_SUBMITTED';
+    }
+
+    if (
+      !c.approval?.caseManagerApproved
+    ) {
+      return 'CM_APPROVED';
+    }
+
+    const p1Submitted =
+      c.preQuestionnaireUser1?.submitted;
+
+    const p2Submitted =
+      c.preQuestionnaireUser2?.submitted;
+
+    if (
+      !p1Submitted ||
+      !p2Submitted
+    ) {
+      return 'PRE_LAWYER_PENDING';
+    }
+
+    const p1Lawyer =
+      c.preQuestionnaireUser1
+        ?.selectedLawyer;
+
+    const p2Lawyer =
+      c.preQuestionnaireUser2
+        ?.selectedLawyer;
+
+    if (
+      !p1Lawyer ||
+      !p2Lawyer
+    ) {
+      return 'LAWYERS_ASSIGNED';
+    }
+
+    if (
+      !c.approval?.lawyerApproved
+    ) {
+      return 'LEGAL_REVIEW';
+    }
+
+    return 'READY_FOR_SIGNATURE';
+  }
+
+
+  
   async create(ownerId: string, title?: string): Promise<CaseDocument> {
     const c = new this.caseModel({
       title: title || 'Untitled case',
@@ -230,6 +307,7 @@ export class CasesService {
     c.invitedEmail = inviteEmail.toLowerCase();
     c.inviteToken = token;
     c.inviteTokenExpires = expires;
+    c.partnerInvited = true;
     await c.save();
     const inviteUrl = `${this.config.get('APP_SERVER_URL')}/auth/accept-invite?token=${token}&caseId=${c._id}&email=${encodeURIComponent(inviteEmail)}`;
     if (typeof (this.mailService as any).sendInvite === 'function') {
@@ -382,10 +460,8 @@ export class CasesService {
     if (!c) throw new NotFoundException('Case not found');
 
     // enforce workflow state
-    if (c.workflowStatus !== 'LAWYER') {
-      throw new ForbiddenException(
-        'Pre-questionnaire cannot be submitted: case not in LAWYER Selection state',
-      );
+    if (c.workflowStatus !== CaseWorkflowStatus.LAWYERS_ASSIGNED) {
+      throw new ForbiddenException('Pre-questionnaire cannot be submitted: case not in LAWYER Selection state');
     }
 
     if (!Types.ObjectId.isValid(actorId))
@@ -536,7 +612,7 @@ ${taskLines.join('\n\n')}`;
       c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted
     );
     if (p1Submitted && p2Submitted) {
-      c.workflowStatus = 'CM';
+      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
       await c.save();
 
       // notify both users using mailService helper (it internally resolves emails)
@@ -984,12 +1060,8 @@ LetsPrenup Team
       approval.user2ApprovedAt = now;
     }
     await c.save();
-    if (
-      approval.user1Approved &&
-      approval.user2Approved &&
-      approval.caseManagerApproved
-    ) {
-      c.workflowStatus = 'LAWYER';
+    if (approval.user1Approved && approval.user2Approved && approval.caseManagerApproved) {
+      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
       c.fullyLocked = true;
       await c.save();
       await this.notifyUsersToCompletePreLawyer(c);
@@ -1029,12 +1101,8 @@ LetsPrenup Team
     approval.caseManagerApprovedAt = new Date();
     (approval as any).approvedBy = new Types.ObjectId(actorId);
     await c.save();
-    if (
-      approval.user1Approved &&
-      approval.user2Approved &&
-      approval.caseManagerApproved
-    ) {
-      c.workflowStatus = 'LAWYER';
+    if (approval.user1Approved && approval.user2Approved && approval.caseManagerApproved) {
+      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
       c.fullyLocked = true;
       await c.save();
       await this.notifyUsersToCompletePreLawyer(c);
@@ -1053,7 +1121,7 @@ LetsPrenup Team
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
     (c as any).assignedCaseManager = new Types.ObjectId(managerId);
-    c.workflowStatus = 'CM';
+    c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
     await c.save();
     const populated = await this.caseModel
       .findById(c._id)
@@ -1117,17 +1185,14 @@ Wenup
     if (!['CM', 'PAID', 'LAWYER'].includes(normalized))
       throw new BadRequestException('Invalid status');
     if (normalized === 'CM') {
-      c.workflowStatus = 'CM';
-      if (!c.assignedCaseManager)
-        c.assignedCaseManager = Types.ObjectId.isValid(actorId)
-          ? new Types.ObjectId(actorId)
-          : null;
+      c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
+      if (!c.assignedCaseManager) c.assignedCaseManager = Types.ObjectId.isValid(actorId) ? new Types.ObjectId(actorId) : null;
       await c.save();
       await this.notifyCaseManagersOfNewCmCase(c);
       return c;
     }
     if (normalized === 'PAID') {
-      c.workflowStatus = 'PAID';
+      c.workflowStatus = CaseWorkflowStatus.DRAFT;
       c.fullyLocked = false;
       c.fullyLockedBy = null;
       c.fullyLockedAt = null;
@@ -1165,8 +1230,8 @@ Wenup
       await this.notifyUsersCaseMovedToPaid(c);
       return c;
     }
-    if (normalized === 'LAWYER') {
-      c.workflowStatus = 'LAWYER';
+    if (normalized === 'LAWYERS_ASSIGNED') {
+      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;;
       c.fullyLocked = true;
       c.fullyLockedBy = Types.ObjectId.isValid(actorId)
         ? new Types.ObjectId(actorId)
@@ -1384,10 +1449,6 @@ Wenup
     };
   }
 
-  /* ---------------------------------------------------------------------- */
-  /* Agreement document generation                                          */
-  /* ---------------------------------------------------------------------- */
-
   private humanizeKey(key: string): string {
     return key
       .replace(/([A-Z])/g, ' $1')
@@ -1548,8 +1609,7 @@ Wenup
     //   approvedBy: actorObjId,
     // };
 
-    // await c.save();
+    return { success: true, fileName : "", filePath : "" };
 
-    return { success: true, fileName : '', filePath : '' };
   }
 }
