@@ -24,6 +24,7 @@ export class CasesController {
     const title = body.title;
     return this.casesService.create(user.id, title);
   }
+
   @UseGuards(JwtAuthGuard)
   @Get()
   async list(@Req() req) {
@@ -34,6 +35,7 @@ export class CasesController {
     }
     return this.casesService.findByUser(user.id);
   }
+  
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findById(@Req() req, @Param('id') id: string) {
@@ -52,7 +54,7 @@ export class CasesController {
     @Body() dto: InvitePartnerDto,
   ) {
     console.log('RAW BODY:', req.body);
-8
+
 console.log('DTO:', dto);
 
 

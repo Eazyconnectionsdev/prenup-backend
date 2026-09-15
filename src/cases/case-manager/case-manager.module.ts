@@ -47,13 +47,15 @@ import {
   CaseChangeSet,
   CaseChangeSetSchema,
 } from '../../cases/schemas/case_changesets.schema';
-
+import { MailModule } from '../../mail/mail.module'; 
 import { CaseManagerController } from './case-manager.controller';
 import { CaseManagerService } from './case-manager.service';
 
 @Module({
   imports: [
+    MailModule,
     MongooseModule.forFeature([
+      
       {
         name: Case.name,
         schema: CaseSchema,

@@ -44,9 +44,12 @@ import {
 import {
   CaseChangeSet,
 } from '../../cases/schemas/case_changesets.schema';
+
+import { MailService } from '../../mail/mail.service';
 @Injectable()
 export class CaseManagerService {
   constructor(
+    private readonly mailService: MailService,
 
     @InjectModel(CaseManagerNote.name)
     private readonly noteModel: Model<CaseManagerNote>,
@@ -395,14 +398,16 @@ export class CaseManagerService {
   // ====================================================
   // RETURN TO DRAFT
   // ====================================================
-
   async returnToDraft(
     caseId: string,
     dto: ReturnDraftDto,
     userId: string,
   ) {
     const caseDoc =
-      await this.caseModel.findById(caseId);
+      await this.caseModel
+        .findById(caseId)
+        .populate('owner')
+        .populate('invitedUser');
 
     if (!caseDoc) {
       throw new NotFoundException(
@@ -414,9 +419,7 @@ export class CaseManagerService {
       CaseWorkflowStatus.DRAFT;
 
     caseDoc.cmApproved = false;
-
     caseDoc.cmApprovedAt = null;
-
     caseDoc.cmApprovedBy = null;
 
     caseDoc.cmReturnReason =
@@ -438,6 +441,11 @@ export class CaseManagerService {
       dto.reason,
     );
 
+    await this.mailService.sendCaseReturnedToDraft(
+      caseDoc,
+      dto.reason,
+    );
+
     return {
       success: true,
       workflowStatus:
@@ -445,23 +453,28 @@ export class CaseManagerService {
     };
   }
 
-
   // ====================================================
   // APPROVE CASE
   // ====================================================
-
   async approveCase(
     caseId: string,
     dto: ApproveCaseDto,
     userId: string,
   ) {
-    const caseDoc = await this.caseModel.findById(caseId);
+    const caseDoc =
+      await this.caseModel
+        .findById(caseId)
+        .populate('owner')
+        .populate('invitedUser');
 
     if (!caseDoc) {
-      throw new NotFoundException('Case not found');
+      throw new NotFoundException(
+        'Case not found',
+      );
     }
 
-    caseDoc.workflowStatus = CaseWorkflowStatus.CM_APPROVED
+    caseDoc.workflowStatus =
+      CaseWorkflowStatus.CM_APPROVED;
 
     await caseDoc.save();
 
@@ -471,9 +484,14 @@ export class CaseManagerService {
       'CM_APPROVED',
     );
 
+    await this.mailService.sendCaseApproved(
+      caseDoc,
+    );
+
     return {
       success: true,
-      status: CaseWorkflowStatus.PRE_LAWYER_PENDING,
+      status:
+        CaseWorkflowStatus.CM_APPROVED,
     };
   }
 
@@ -645,10 +663,29 @@ export class CaseManagerService {
     }
 
     const caseDoc =
-      await this.caseModel.findById(caseId);
+      await this.caseModel
+        .findById(caseId)
+        .populate('owner')
+        .populate('invitedUser');
 
     if (!caseDoc) {
       throw new NotFoundException();
+    }
+
+    const [p1Lawyer, p2Lawyer] =
+      await Promise.all([
+        this.lawyerModel.findById(
+          dto.p1LawyerId,
+        ),
+        this.lawyerModel.findById(
+          dto.p2LawyerId,
+        ),
+      ]);
+
+    if (!p1Lawyer || !p2Lawyer) {
+      throw new BadRequestException(
+        'Lawyer not found',
+      );
     }
 
     caseDoc.assignedLawyerP1 =
@@ -672,6 +709,12 @@ export class CaseManagerService {
       caseId,
       userId,
       'LAWYERS_ASSIGNED',
+    );
+
+    await this.mailService.sendLawyerAssignedNotification(
+      caseDoc,
+      p1Lawyer,
+      p2Lawyer,
     );
 
     return caseDoc;
@@ -1110,4 +1153,25 @@ export class CaseManagerService {
     });
   }
 
+  async getCasesByStatus(
+    userId: string,
+    status: string,
+  ) {
+    return this.caseModel
+      .find({
+        assignedCaseManager: new Types.ObjectId(userId),
+        workflowStatus: status,
+      })
+      .populate('owner invitedUser assignedCaseManager')
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  async getAllCases(userId: string) {
+    return this.caseModel
+      .find({})
+      .populate('owner invitedUser assignedCaseManager')
+      .sort({ createdAt: -1 })
+      .exec();
+  }
 }
