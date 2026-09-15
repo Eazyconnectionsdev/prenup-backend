@@ -234,97 +234,97 @@ export class CasesService {
   }
 
 
-  
+
   async invite(
-  caseId: string,
-  inviterId: string,
-  dto: InvitePartnerDto,
-) {
-  const c = await this.caseModel.findById(caseId);
+    caseId: string,
+    inviterId: string,
+    dto: InvitePartnerDto,
+  ) {
+    const c = await this.caseModel.findById(caseId);
 
-  if (!c) {
-    throw new NotFoundException(
-      'Case not found',
-    );
-  }
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
 
-  const token =
-    crypto.randomBytes(32).toString(
-      'hex',
-    );
+    const token =
+      crypto.randomBytes(32).toString(
+        'hex',
+      );
 
-  const expires = new Date(
-    Date.now() +
+    const expires = new Date(
+      Date.now() +
       Number(
         this.config.get(
           'INVITE_TOKEN_EXPIRY_HOURS',
         ) || 72,
       ) *
-        3600 *
-        1000,
-  );
+      3600 *
+      1000,
+    );
 
-  c.invitedEmail =
-    dto.email;
+    c.invitedEmail =
+      dto.email;
 
-  c.partnerInvited = true;
+    c.partnerInvited = true;
 
-  c.inviteToken = token;
+    c.inviteToken = token;
 
-  c.inviteTokenExpires = expires;
+    c.inviteTokenExpires = expires;
 
-  c.partnerInviteDetails = {
-    firstName: dto.firstName,
-    lastName: dto.lastName,
-    email: dto.email,
-    mobileNumber:
-      dto.mobileNumber,
-    relationshipStatus:
-      dto.relationshipStatus,
-    targetWeddingDate:
-      dto.targetWeddingDate,
-    personalMessage:
-      dto.personalMessage,
-  };
-
-  await c.save();
-
-  const params =
-    new URLSearchParams({
-      token,
-      caseId: c._id.toString(),
+    c.partnerInviteDetails = {
+      firstName: dto.firstName,
+      lastName: dto.lastName,
       email: dto.email,
-      firstName:
-        dto.firstName || '',
-      lastName:
-        dto.lastName || '',
       mobileNumber:
-        dto.mobileNumber || '',
+        dto.mobileNumber,
       relationshipStatus:
-        dto.relationshipStatus ||
-        '',
+        dto.relationshipStatus,
       targetWeddingDate:
-        dto.targetWeddingDate
-          ? new Date(
+        dto.targetWeddingDate,
+      personalMessage:
+        dto.personalMessage,
+    };
+
+    await c.save();
+
+    const params =
+      new URLSearchParams({
+        token,
+        caseId: c._id.toString(),
+        email: dto.email,
+        firstName:
+          dto.firstName || '',
+        lastName:
+          dto.lastName || '',
+        mobileNumber:
+          dto.mobileNumber || '',
+        relationshipStatus:
+          dto.relationshipStatus ||
+          '',
+        targetWeddingDate:
+          dto.targetWeddingDate
+            ? new Date(
               dto.targetWeddingDate,
             ).toISOString()
-          : '',
-      personalMessage:
-        dto.personalMessage || '',
-    });
+            : '',
+        personalMessage:
+          dto.personalMessage || '',
+      });
 
-  const inviteUrl =
-    `${this.config.get('APP_BASE_URL')}/register-partner?${params.toString()}`;
-console.log("dto.email", dto.email)
-  await this.mailService.sendInvite(
-    dto.email,
-    inviteUrl,
-  );
+    const inviteUrl =
+      `${this.config.get('APP_BASE_URL')}/register-partner?${params.toString()}`;
+    console.log("dto.email", dto.email)
+    await this.mailService.sendInvite(
+      dto.email,
+      inviteUrl,
+    );
 
-  return {
-    inviteUrl,
-  };
-}
+    return {
+      inviteUrl,
+    };
+  }
 
   async updateQuestionnaireStep(
     caseId: string,
@@ -1084,5 +1084,19 @@ Wenup
     }
 
     return CaseWorkflowStatus.DRAFT;
+  }
+
+  async getCasesByStatus(
+    userId: string,
+    status: string,
+  ) {
+    return this.caseModel
+      .find({
+        assignedCaseManager: new Types.ObjectId(userId),
+        workflowStatus: status,
+      })
+      .populate('owner invitedUser assignedCaseManager')
+      .sort({ createdAt: -1 })
+      .exec();
   }
 }

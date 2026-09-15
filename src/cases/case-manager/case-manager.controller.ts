@@ -32,7 +32,7 @@ import { CreateVersionDto } from './dto/create-version.dto';
 export class CaseManagerController {
   constructor(
     private readonly caseManagerService: CaseManagerService,
-  ) {}
+  ) { }
 
   private ensureUser(req: any) {
     const user = req.user;
@@ -45,6 +45,11 @@ export class CaseManagerController {
 
     return user;
   }
+
+  @Get('cases')
+async getAllCases() {
+  return this.caseManagerService.getAllCases('');
+}
 
   // =====================================================
   // DASHBOARD
@@ -71,6 +76,21 @@ export class CaseManagerController {
       user.id,
     );
   }
+
+
+  @Get('dashboard/stages/:status/cases')
+  async getCasesByStatus(
+    @Param('status') status: string,
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.caseManagerService.getCasesByStatus(
+      user.id,
+      status,
+    );
+  }
+
 
   // =====================================================
   // CASE OVERVIEW
@@ -347,119 +367,119 @@ export class CaseManagerController {
   }
 
   @Get(':caseId/versions/compare')
-async compareVersions(
-  @Param('caseId') caseId: string,
-  @Query('from') from: string,
-  @Query('to') to: string,
-) {
-  return this.caseManagerService.compareVersions(
-    caseId,
-    from,
-    to,
-  );
-}
+  async compareVersions(
+    @Param('caseId') caseId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.caseManagerService.compareVersions(
+      caseId,
+      from,
+      to,
+    );
+  }
 
-@Get(':caseId/changesets')
-async getChangeSets(
-  @Param('caseId') caseId: string,
-) {
-  return this.caseManagerService.getChangeSets(
-    caseId,
-  );
-}
+  @Get(':caseId/changesets')
+  async getChangeSets(
+    @Param('caseId') caseId: string,
+  ) {
+    return this.caseManagerService.getChangeSets(
+      caseId,
+    );
+  }
 
-@Get(':caseId/agreements')
-async agreementVersions(
-  @Param('caseId') caseId: string,
-) {
-  return this.caseManagerService.agreementVersions(
-    caseId,
-  );
-}
+  @Get(':caseId/agreements')
+  async agreementVersions(
+    @Param('caseId') caseId: string,
+  ) {
+    return this.caseManagerService.agreementVersions(
+      caseId,
+    );
+  }
 
-@Post(':caseId/agreements')
-@UseInterceptors(
-  FileInterceptor('file'),
-)
-async uploadAgreement(
-  @Req() req,
-  @Param('caseId') caseId: string,
-  @UploadedFile() file: any,
-) {
-  const user = this.ensureUser(req);
+  @Post(':caseId/agreements')
+  @UseInterceptors(
+    FileInterceptor('file'),
+  )
+  async uploadAgreement(
+    @Req() req,
+    @Param('caseId') caseId: string,
+    @UploadedFile() file: any,
+  ) {
+    const user = this.ensureUser(req);
 
-  return this.caseManagerService.uploadAgreement(
-    caseId,
-    file,
-    user.id,
-  );
-}
+    return this.caseManagerService.uploadAgreement(
+      caseId,
+      file,
+      user.id,
+    );
+  }
 
-@Get(':caseId/agreements/compare')
-async compareAgreements(
-  @Param('caseId') caseId: string,
-  @Query('left') left: string,
-  @Query('right') right: string,
-) {
-  return this.caseManagerService.compareAgreements(
-    caseId,
-    left,
-    right,
-  );
-}
+  @Get(':caseId/agreements/compare')
+  async compareAgreements(
+    @Param('caseId') caseId: string,
+    @Query('left') left: string,
+    @Query('right') right: string,
+  ) {
+    return this.caseManagerService.compareAgreements(
+      caseId,
+      left,
+      right,
+    );
+  }
 
-@Get(':caseId/timeline')
-async timeline(
-  @Param('caseId') caseId: string,
-) {
-  return this.caseManagerService.timeline(
-    caseId,
-  );
-}
+  @Get(':caseId/timeline')
+  async timeline(
+    @Param('caseId') caseId: string,
+  ) {
+    return this.caseManagerService.timeline(
+      caseId,
+    );
+  }
 
-@Get(':caseId/audit-log')
-async auditLog(
-  @Param('caseId') caseId: string,
-) {
-  return this.caseManagerService.auditLog(
-    caseId,
-  );
-}
+  @Get(':caseId/audit-log')
+  async auditLog(
+    @Param('caseId') caseId: string,
+  ) {
+    return this.caseManagerService.auditLog(
+      caseId,
+    );
+  }
 
-@Post(':caseId/archive')
-async archiveCase(
-  @Req() req,
-  @Param('caseId') caseId: string,
-) {
-  const user = this.ensureUser(req);
+  @Post(':caseId/archive')
+  async archiveCase(
+    @Req() req,
+    @Param('caseId') caseId: string,
+  ) {
+    const user = this.ensureUser(req);
 
-  return this.caseManagerService.archiveCase(
-    caseId,
-    user.id,
-  );
-}
+    return this.caseManagerService.archiveCase(
+      caseId,
+      user.id,
+    );
+  }
 
-@Get('completed/list')
-async completedCases(
-  @Req() req,
-) {
-  const user = this.ensureUser(req);
+  @Get('completed/list')
+  async completedCases(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
 
-  return this.caseManagerService.completedCases(
-    user.id,
-  );
-}
+    return this.caseManagerService.completedCases(
+      user.id,
+    );
+  }
 
-@Get('ready-for-archive/list')
-async readyForArchive(
-  @Req() req,
-) {
-  const user = this.ensureUser(req);
+  @Get('ready-for-archive/list')
+  async readyForArchive(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
 
-  return this.caseManagerService.readyForArchive(
-    user.id,
-  );
-}
+    return this.caseManagerService.readyForArchive(
+      user.id,
+    );
+  }
 
 
 

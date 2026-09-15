@@ -235,4 +235,221 @@ export class MailService implements OnModuleInit {
     const html = `<p>You have been selected as the lawyer for case <strong>${caseId}</strong>.</p><p>Client: ${clientInfo}</p><p>Message: ${clientMessage || '(no message)'}</p>`;
     return this.sendRaw({ to: lawyerEmail, subject, text, html }).catch(() => null);
   }
+
+  async sendLawyerAssignedNotification(
+    caseDoc: any,
+    p1Lawyer: any,
+    p2Lawyer: any,
+  ) {
+    if (!caseDoc) return;
+
+    const owner = await this.resolveEmail(
+      caseDoc.owner,
+    );
+
+    const invited = await this.resolveEmail(
+      caseDoc.invitedUser,
+      caseDoc.invitedEmail,
+    );
+
+    // User 1
+    if (owner) {
+      await this.sendRaw({
+        to: owner,
+        subject: 'Your Lawyer Has Been Assigned',
+        text: `
+Your lawyer has been assigned.
+
+Lawyer: ${p1Lawyer.name}
+Fee: ${p1Lawyer.priceText}
+
+Your lawyer will contact you shortly.
+      `,
+        html: `
+        <h2>Your Lawyer Has Been Assigned</h2>
+
+        <p>Your assigned lawyer is:</p>
+
+        <p>
+          <strong>${p1Lawyer.name}</strong>
+        </p>
+
+        <p>${p1Lawyer.priceText}</p>
+
+        <p>
+          Your lawyer will contact you shortly.
+        </p>
+      `,
+      });
+    }
+
+    // User 2
+    if (invited) {
+      await this.sendRaw({
+        to: invited,
+        subject: 'Your Lawyer Has Been Assigned',
+        text: `
+Your lawyer has been assigned.
+
+Lawyer: ${p2Lawyer.name}
+Fee: ${p2Lawyer.priceText}
+
+Your lawyer will contact you shortly.
+      `,
+        html: `
+        <h2>Your Lawyer Has Been Assigned</h2>
+
+        <p>Your assigned lawyer is:</p>
+
+        <p>
+          <strong>${p2Lawyer.name}</strong>
+        </p>
+
+        <p>${p2Lawyer.priceText}</p>
+
+        <p>
+          Your lawyer will contact you shortly.
+        </p>
+      `,
+      });
+    }
+  }
+
+  async sendCaseReturnedToDraft(
+  caseDoc: any,
+  reason: string,
+) {
+  if (!caseDoc) return;
+
+  const owner = await this.resolveEmail(
+    caseDoc.owner,
+  );
+
+  const invited = await this.resolveEmail(
+    caseDoc.invitedUser,
+    caseDoc.invitedEmail,
+  );
+
+  const recipients = Array.from(
+    new Set(
+      [owner, invited].filter(
+        (x): x is string => !!x,
+      ),
+    ),
+  );
+
+  if (!recipients.length) {
+    return;
+  }
+
+  const subject =
+    'Action Required: Case Returned to Draft';
+
+  const text = `
+Your case has been returned to draft by the Case Manager.
+
+Reason:
+${reason}
+
+Please log in, review your information, make the required amendments, and resubmit your forms.
+  `;
+
+  const html = `
+    <h2>Case Returned to Draft</h2>
+
+    <p>
+      Your case has been returned to draft by the Case Manager.
+    </p>
+
+    <p>
+      <strong>Reason:</strong>
+    </p>
+
+    <p>${reason}</p>
+
+    <p>
+      Please log in, review your information,
+      make the required amendments,
+      and resubmit your forms.
+    </p>
+  `;
+
+  await Promise.all(
+    recipients.map((email) =>
+      this.sendRaw({
+        to: email,
+        subject,
+        text,
+        html,
+      }).catch(() => null),
+    ),
+  );
+}
+async sendCaseApproved(
+  caseDoc: any,
+) {
+  if (!caseDoc) return;
+
+  const owner = await this.resolveEmail(
+    caseDoc.owner,
+  );
+
+  const invited = await this.resolveEmail(
+    caseDoc.invitedUser,
+    caseDoc.invitedEmail,
+  );
+
+  const recipients = Array.from(
+    new Set(
+      [owner, invited].filter(
+        (x): x is string => !!x,
+      ),
+    ),
+  );
+
+  if (!recipients.length) {
+    return;
+  }
+
+  const subject =
+    'Case Approved by Case Manager';
+
+  const text = `
+Your case has been approved by the Case Manager.
+
+The review process has been completed successfully.
+
+Your case will now proceed to the next stage of the legal review process.
+  `;
+
+  const html = `
+    <h2>Case Approved</h2>
+
+    <p>
+      Your case has been approved by the
+      Case Manager.
+    </p>
+
+    <p>
+      The review process has been completed
+      successfully.
+    </p>
+
+    <p>
+      Your case will now proceed to the next
+      stage of the legal review process.
+    </p>
+  `;
+
+  await Promise.all(
+    recipients.map((email) =>
+      this.sendRaw({
+        to: email,
+        subject,
+        text,
+        html,
+      }).catch(() => null),
+    ),
+  );
+}
 }
