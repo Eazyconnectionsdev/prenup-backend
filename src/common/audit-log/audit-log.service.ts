@@ -30,6 +30,7 @@ export class AuditLogService {
         stage: dto.stage,
         changedFields: dto.changedFields,
         notes: dto.notes,
+
         ipAddress: dto.ipAddress,
         userAgent: dto.userAgent,
       });
@@ -39,22 +40,33 @@ export class AuditLogService {
       this.logger.error(
         `Audit log failed [module=${dto.module}, entity=${dto.entityType}:${dto.entityId}, action=${dto.action}]`,
         err instanceof Error ? err.stack : String(err),
+
       );
       return null;
     }
+
   }
 
+
   async getCaseTimeline(
+
     caseId: string | Types.ObjectId,
+
     options?: { limit?: number; skip?: number },
+
   ): Promise<AuditLogDocument[]> {
     return this.auditLogModel
+
+
       .find({ caseId: new Types.ObjectId(caseId) })
+
       .sort({ createdAt: -1 })
       .skip(options?.skip ?? 0)
       .limit(options?.limit ?? 100)
       .populate('userId', 'name email')
   }
+
+
 
   async getEntityHistory(
     entityType: string,
@@ -62,26 +74,36 @@ export class AuditLogService {
   ): Promise<AuditLogDocument[]> {
     return this.auditLogModel
       .find({ entityType, entityId: new Types.ObjectId(entityId) })
+
       .sort({ createdAt: -1 })
       .populate('userId', 'name email')
+
   }
 
   async getUserActivity(
+
     userId: string | Types.ObjectId,
+
     options?: { module?: string; limit?: number },
   ): Promise<AuditLogDocument[]> {
     return this.auditLogModel
       .find({
+
         userId: new Types.ObjectId(userId),
+
         ...(options?.module ? { module: options.module } : {}),
       })
+
       .sort({ createdAt: -1 })
       .limit(options?.limit ?? 100)
+
   }
+
 
   async getModuleLogs(
     module: string,
     options?: { limit?: number; skip?: number },
+
   ): Promise<AuditLogDocument[]> {
     return this.auditLogModel
       .find({ module })
