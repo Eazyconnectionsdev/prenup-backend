@@ -1,5 +1,3 @@
-// src/case-manager/case-manager.controller.ts
-
 import {
   Body,
   Controller,
@@ -7,32 +5,29 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
   UseInterceptors,
   UnauthorizedException,
-  Query,
 } from '@nestjs/common';
 
 import { FileInterceptor } from '@nestjs/platform-express';
 
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 
-import { CaseManagerService } from './case-manager.service';
+import { LawyerService } from './lawyer.service';
 
-import { AssignLawyersDto } from './dto/assign-lawyers.dto';
-import { ReturnDraftDto } from './dto/return-draft.dto';
-import { ApproveCaseDto } from './dto/approve-case.dto';
-import { CreateNoteDto } from './dto/create-note.dto';
-import { CreateVersionDto } from './dto/create-version.dto';
+import { CreateNoteDto } from '../case-manager/dto/create-note.dto';
+import { CreateVersionDto } from '../case-manager/dto/create-version.dto';
 
-@Controller('case-manager')
+@Controller('lawyer')
 @UseGuards(JwtAuthGuard)
-export class CaseManagerController {
+export class LawyerController {
   constructor(
-    private readonly caseManagerService: CaseManagerService,
-  ) { }
+    private readonly lawyerService: LawyerService,
+  ) {}
 
   private ensureUser(req: any) {
     const user = req.user;
@@ -46,137 +41,179 @@ export class CaseManagerController {
     return user;
   }
 
-  @Get('cases')
-async getAllCases() {
-  return this.caseManagerService.getAllCases('');
-}
-
   // =====================================================
   // DASHBOARD
   // =====================================================
 
   @Get('dashboard')
-  async getDashboard(
+  async dashboard(
     @Req() req,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.getDashboard(
+    return this.lawyerService.dashboard(
       user.id,
     );
   }
 
   @Get('dashboard/stages')
-  async getStageSummary(
+  async stageSummary(
     @Req() req,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.getStageSummary(
+    return this.lawyerService.stageSummary(
       user.id,
     );
   }
-
-
-  @Get('dashboard/stages/:status/cases')
-  async getCasesByStatus(
-    @Param('status') status: string,
-    @Req() req,
-  ) {
-    const user = this.ensureUser(req);
-
-    return this.caseManagerService.getCasesByStatus(
-      user.id,
-      status,
-    );
-  }
-
 
   // =====================================================
-  // CASE OVERVIEW
+  // CASE
   // =====================================================
 
   @Get(':caseId')
-  async getCaseOverview(
+  async caseOverview(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getCaseOverview(
+    return this.lawyerService.caseOverview(
       caseId,
     );
   }
 
   @Get(':caseId/status')
-  async getCaseStatus(
+  async status(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getCaseStatus(
+    return this.lawyerService.status(
       caseId,
     );
   }
 
   // =====================================================
-  // CM REVIEW
+  // LAWYER REVIEW
   // =====================================================
 
-  @Post(':caseId/return-draft')
-  async returnToDraft(
-    @Req() req,
-    @Param('caseId') caseId: string,
-    @Body() dto: ReturnDraftDto,
-  ) {
-    const user = this.ensureUser(req);
-
-    return this.caseManagerService.returnToDraft(
-      caseId,
-      dto,
-      user.id,
-    );
-  }
-
-  @Post(':caseId/approve')
-  async approveCase(
-    @Req() req,
-    @Param('caseId') caseId: string,
-    @Body() dto: ApproveCaseDto,
-  ) {
-    const user = this.ensureUser(req);
-
-    return this.caseManagerService.approveCase(
-      caseId,
-      dto,
-      user.id,
-    );
-  }
-
-  // =====================================================
-  // COUPLE APPROVALS
-  // =====================================================
-
-  @Post(':caseId/request-couple-approval')
-  async requestCoupleApproval(
+  @Post(':caseId/review-complete')
+  async reviewComplete(
     @Req() req,
     @Param('caseId') caseId: string,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.requestCoupleApproval(
+    return this.lawyerService.reviewComplete(
       caseId,
       user.id,
     );
   }
 
-  @Post(':caseId/p1-confirmation')
+  // =====================================================
+  // ILA
+  // =====================================================
+
+  @Post(':caseId/request-ila')
+  async requestILA(
+    @Req() req,
+    @Param('caseId') caseId: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.requestILA(
+      caseId,
+      user.id,
+    );
+  }
+
+  @Post(':caseId/p1-ila')
   @UseInterceptors(
     FileInterceptor('file'),
   )
-  async uploadP1Confirmation(
+  async completeP1ILA(
     @Req() req,
     @Param('caseId') caseId: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.uploadP1Confirmation(
+    return this.lawyerService.completeP1ILA(
+      caseId,
+      file,
+      user.id,
+    );
+  }
+
+  @Post(':caseId/p2-ila')
+  @UseInterceptors(
+    FileInterceptor('file'),
+  )
+  async completeP2ILA(
+    @Req() req,
+    @Param('caseId') caseId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.completeP2ILA(
+      caseId,
+      file,
+      user.id,
+    );
+  }
+
+  @Get(':caseId/ila-status')
+  async ilaStatus(
+    @Param('caseId') caseId: string,
+  ) {
+    return this.lawyerService.ilaStatus(
+      caseId,
+    );
+  }
+
+  // =====================================================
+  // LAWYER SIGNOFF
+  // =====================================================
+
+  @Post(':caseId/p1-signoff')
+  async p1Signoff(
+    @Req() req,
+    @Param('caseId') caseId: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.p1Signoff(
+      caseId,
+      user.id,
+    );
+  }
+
+  @Post(':caseId/p2-signoff')
+  async p2Signoff(
+    @Req() req,
+    @Param('caseId') caseId: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.p2Signoff(
+      caseId,
+      user.id,
+    );
+  }
+
+  // =====================================================
+  // FINAL CLIENT CONFIRMATION
+  // =====================================================
+
+  @Post(':caseId/p1-confirmation')
+  @UseInterceptors(
+    FileInterceptor('file'),
+  )
+  async finalP1Confirmation(
+    @Req() req,
+    @Param('caseId') caseId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.finalP1Confirmation(
       caseId,
       file,
       user.id,
@@ -187,14 +224,14 @@ async getAllCases() {
   @UseInterceptors(
     FileInterceptor('file'),
   )
-  async uploadP2Confirmation(
+  async finalP2Confirmation(
     @Req() req,
     @Param('caseId') caseId: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.uploadP2Confirmation(
+    return this.lawyerService.finalP2Confirmation(
       caseId,
       file,
       user.id,
@@ -202,38 +239,27 @@ async getAllCases() {
   }
 
   @Get(':caseId/confirmations')
-  async getConfirmations(
+  async confirmations(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getConfirmations(
+    return this.lawyerService.confirmations(
       caseId,
     );
   }
 
   // =====================================================
-  // LAWYER ASSIGNMENT
+  // COMPLETE CASE
   // =====================================================
 
-  @Get(':caseId/available-lawyers')
-  async availableLawyers(
-    @Param('caseId') caseId: string,
-  ) {
-    return this.caseManagerService.availableLawyers(
-      caseId,
-    );
-  }
-
-  @Post(':caseId/assign-lawyers')
-  async assignLawyers(
+  @Post(':caseId/complete')
+  async completeCase(
     @Req() req,
     @Param('caseId') caseId: string,
-    @Body() dto: AssignLawyersDto,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.assignLawyers(
+    return this.lawyerService.completeCase(
       caseId,
-      dto,
       user.id,
     );
   }
@@ -253,7 +279,7 @@ async getAllCases() {
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.uploadDocument(
+    return this.lawyerService.uploadDocument(
       caseId,
       file,
       user.id,
@@ -261,10 +287,10 @@ async getAllCases() {
   }
 
   @Get(':caseId/documents')
-  async getDocuments(
+  async documents(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getDocuments(
+    return this.lawyerService.documents(
       caseId,
     );
   }
@@ -277,7 +303,7 @@ async getAllCases() {
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.deleteDocument(
+    return this.lawyerService.deleteDocument(
       caseId,
       documentId,
       user.id,
@@ -296,7 +322,7 @@ async getAllCases() {
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.addNote(
+    return this.lawyerService.addNote(
       caseId,
       dto,
       user.id,
@@ -304,10 +330,10 @@ async getAllCases() {
   }
 
   @Get(':caseId/notes')
-  async getNotes(
+  async notes(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getNotes(
+    return this.lawyerService.notes(
       caseId,
     );
   }
@@ -320,7 +346,7 @@ async getAllCases() {
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.deleteNote(
+    return this.lawyerService.deleteNote(
       caseId,
       noteId,
       user.id,
@@ -328,7 +354,7 @@ async getAllCases() {
   }
 
   // =====================================================
-  // VERSIONING
+  // CASE VERSIONING
   // =====================================================
 
   @Post(':caseId/versions')
@@ -339,7 +365,7 @@ async getAllCases() {
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.createVersion(
+    return this.lawyerService.createVersion(
       caseId,
       dto,
       user.id,
@@ -347,21 +373,19 @@ async getAllCases() {
   }
 
   @Get(':caseId/versions')
-  async getVersions(
+  async versions(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getVersions(
+    return this.lawyerService.versions(
       caseId,
     );
   }
 
   @Get(':caseId/versions/:versionId')
-  async getVersion(
-    @Param('caseId') caseId: string,
+  async version(
     @Param('versionId') versionId: string,
   ) {
-    return this.caseManagerService.getVersion(
-      caseId,
+    return this.lawyerService.version(
       versionId,
     );
   }
@@ -372,7 +396,7 @@ async getAllCases() {
     @Query('from') from: string,
     @Query('to') to: string,
   ) {
-    return this.caseManagerService.compareVersions(
+    return this.lawyerService.compareVersions(
       caseId,
       from,
       to,
@@ -380,19 +404,23 @@ async getAllCases() {
   }
 
   @Get(':caseId/changesets')
-  async getChangeSets(
+  async changeSets(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.getChangeSets(
+    return this.lawyerService.changeSets(
       caseId,
     );
   }
 
+  // =====================================================
+  // AGREEMENT VERSIONS
+  // =====================================================
+
   @Get(':caseId/agreements')
-  async agreementVersions(
+  async agreements(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.agreementVersions(
+    return this.lawyerService.agreements(
       caseId,
     );
   }
@@ -404,11 +432,11 @@ async getAllCases() {
   async uploadAgreement(
     @Req() req,
     @Param('caseId') caseId: string,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File,
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.uploadAgreement(
+    return this.lawyerService.uploadAgreement(
       caseId,
       file,
       user.id,
@@ -421,34 +449,38 @@ async getAllCases() {
     @Query('left') left: string,
     @Query('right') right: string,
   ) {
-    return this.caseManagerService.compareAgreements(
+    return this.lawyerService.compareAgreements(
       caseId,
       left,
       right,
     );
   }
 
+  // =====================================================
+  // TIMELINE
+  // =====================================================
+
   @Get(':caseId/timeline')
   async timeline(
     @Param('caseId') caseId: string,
   ) {
-    return this.caseManagerService.timeline(
+    return this.lawyerService.timeline(
       caseId,
     );
   }
 
-  @Post(':caseId/archive')
-  async archiveCase(
-    @Req() req,
+  @Get(':caseId/audit-log')
+  async auditLog(
     @Param('caseId') caseId: string,
   ) {
-    const user = this.ensureUser(req);
-
-    return this.caseManagerService.archiveCase(
+    return this.lawyerService.auditLog(
       caseId,
-      user.id,
     );
   }
+
+  // =====================================================
+  // COMPLETED
+  // =====================================================
 
   @Get('completed/list')
   async completedCases(
@@ -456,22 +488,8 @@ async getAllCases() {
   ) {
     const user = this.ensureUser(req);
 
-    return this.caseManagerService.completedCases(
+    return this.lawyerService.completedCases(
       user.id,
     );
   }
-
-  @Get('ready-for-archive/list')
-  async readyForArchive(
-    @Req() req,
-  ) {
-    const user = this.ensureUser(req);
-
-    return this.caseManagerService.readyForArchive(
-      user.id,
-    );
-  }
-
-
-
 }

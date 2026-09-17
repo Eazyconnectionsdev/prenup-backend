@@ -40,7 +40,7 @@ export class AuthController {
     private authService: AuthService,
     private casesService: CasesService,
     private usersService: UsersService,
-  ) {}
+  ) { }
 
   @Post('register')
   @HttpCode(201)
@@ -50,7 +50,7 @@ export class AuthController {
       message: 'Registration successful. An OTP has been sent to your email for verification.',
       email: result.email,
       expiresAt: result.expiresAt,
-      success : true
+      success: true
     };
   }
 
@@ -68,7 +68,7 @@ export class AuthController {
     }
 
     const userCase = await this.casesService.findByCaseId(user.inviteCaseId);
-    
+
     const signed = this.authService.signUser(user);
     const token = signed.token;
     const expiresAt = signed.expiresAt;
@@ -135,7 +135,7 @@ export class AuthController {
   @HttpCode(200)
   async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
     const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
-    
+
     const token = signed.token;
     const expiresAt = signed.expiresAt;
     const maxAge = expiresAt
@@ -187,42 +187,26 @@ export class AuthController {
     await this.authService.resendRegistrationOtp(dto.email);
     return { message: 'If that email exists and is unverified, a new OTP was sent.' };
   }
+ 
 
-  
-  
-  @Get('accept-invite')
-  @HttpCode(200)
+  @Post('accept-invite')
   async acceptInvite(
-    @Query('token') token: string,
-    @Query('caseId') caseId: string,
-    @Query('email') email: string,
-    @Query('name') name?: string,
-    @Query('password') password?: string,
-    @Res({ passthrough: true }) res?: Response,
+    @Body('token') token: string,
+    @Body('caseId') caseId: string,
+    @Body('password') password: string,
   ) {
-    const c = await this.casesService.findById(caseId);
-    if (
-      !c ||
-      c.inviteToken !== token ||
-      !c.inviteTokenExpires ||
-      new Date() > c.inviteTokenExpires
-    ) {
-      throw new ForbiddenException('Invalid or expired invite token');
-    }
-
-    const result = await this.authService.acceptInvite(caseId, token, email, password, name);
-
-    if (res && result && result.token) {
-     return res.redirect('https://prenup-weld.vercel.app/login');
-    }
-
+    return this.authService.acceptInvite(
+      caseId,
+      token,
+      password,
+    );
   }
 
-    @UseGuards(JwtAuthGuard)
-    @Delete('/delete-partner')
-    async deletePartner(@Req() req) {
-      return this.authService.deletePartner(req.user.id);
-    }
+  @UseGuards(JwtAuthGuard)
+  @Delete('/delete-partner')
+  async deletePartner(@Req() req) {
+    return this.authService.deletePartner(req.user.id);
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get('me')

@@ -12,11 +12,8 @@ import { Model, Types } from 'mongoose';
 import { Case, CaseWorkflowStatus } from '../schemas/case.schema';
 import { Lawyer } from '../schemas/lawyer.schema';
 
-import { ReturnDraftDto } from './dto/return-draft.dto';
-import { AssignLawyersDto } from './dto/assign-lawyers.dto';
-import { CreateNoteDto } from './dto/create-note.dto';
-import { CreateVersionDto } from './dto/create-version.dto';
-import { ApproveCaseDto } from './dto/approve-case.dto';
+import { CreateNoteDto } from '../case-manager/dto/create-note.dto';
+import { CreateVersionDto } from '../case-manager/dto/create-version.dto';
 import {
   CaseManagerNote,
 } from '../../cases/schemas/case_manager_notes.schema';
@@ -33,17 +30,20 @@ import {
   CaseTimeline,
 } from '../../cases/schemas/case_timeline.schema';
 
+import {
+  CaseAuditLog,
+} from '../../cases/schemas/case_audit_logs.schema';
+
+import {
+  AgreementVersion,
+} from '../../cases/schemas/agreement_versions.schema';
 
 import {
   CaseChangeSet,
 } from '../../cases/schemas/case_changesets.schema';
-
-import { MailService } from '../../mail/mail.service';
-import { AgreementVersion } from '../schemas/agreement_versions.schema';
 @Injectable()
-export class CaseManagerService {
+export class LawyerService {
   constructor(
-    private readonly mailService: MailService,
 
     @InjectModel(CaseManagerNote.name)
     private readonly noteModel: Model<CaseManagerNote>,
@@ -56,6 +56,9 @@ export class CaseManagerService {
 
     @InjectModel(CaseTimeline.name)
     private readonly timelineModel: Model<CaseTimeline>,
+
+    @InjectModel(CaseAuditLog.name)
+    private readonly auditLogModel: Model<CaseAuditLog>,
 
     @InjectModel(AgreementVersion.name)
     private readonly agreementVersionModel: Model<AgreementVersion>,
@@ -76,7 +79,7 @@ export class CaseManagerService {
   // DASHBOARD
   // ====================================================
 
-  async getDashboard(userId: string) {
+  async dashboard(userId: string) {
     const [
       totalCases,
 
@@ -317,46 +320,11 @@ export class CaseManagerService {
     };
   }
 
-  async getStageSummary(userId: string) {
-    return {
-      partnerFilling:
-        await this.caseModel.countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.DRAFT,
-        }),
-
-      cmReview:
-        await this.caseModel.countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.COUPLE_SUBMITTED,
-        }),
-
-      preLawyerPending:
-        await this.caseModel.countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.PRE_LAWYER_PENDING,
-        }),
-
-      lawyersAssigned:
-        await this.caseModel.countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.LAWYERS_ASSIGNED,
-        }),
-
-
-      archived:
-        await this.caseModel.countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.ARCHIVED,
-        }),
-    };
-  }
-
   // ====================================================
   // OVERVIEW
   // ====================================================
 
-  async getCaseOverview(caseId: string) {
+  async caseOverview(caseId: string) {
     const caseDoc = await this.caseModel
       .findById(caseId)
       .populate('owner')
@@ -372,7 +340,7 @@ export class CaseManagerService {
     return caseDoc;
   }
 
-  async getCaseStatus(caseId: string) {
+  async status(caseId: string) {
     const caseDoc = await this.caseModel.findById(caseId);
 
     if (!caseDoc) {
@@ -386,115 +354,7 @@ export class CaseManagerService {
     };
   }
 
-  // ====================================================
-  // RETURN TO DRAFT
-  // ====================================================
-  async returnToDraft(
-    caseId: string,
-    dto: ReturnDraftDto,
-    userId: string,
-  ) {
-    const caseDoc =
-      await this.caseModel
-        .findById(caseId)
-        .populate('owner')
-        .populate('invitedUser');
 
-    if (!caseDoc) {
-      throw new NotFoundException(
-        'Case not found',
-      );
-    }
-
-    caseDoc.workflowStatus =
-      CaseWorkflowStatus.DRAFT;
-
-    caseDoc.cmApproved = false;
-    caseDoc.cmApprovedAt = null;
-    caseDoc.cmApprovedBy = null;
-
-    caseDoc.cmReturnReason =
-      dto.reason;
-
-    await caseDoc.save();
-
-    await this.createTimelineEntry(
-      caseId,
-      userId,
-      'RETURN_TO_DRAFT',
-      dto.reason,
-    );
-
-    await this.mailService.sendCaseReturnedToDraft(
-      caseDoc,
-      dto.reason,
-    );
-
-    return {
-      success: true,
-      workflowStatus:
-        CaseWorkflowStatus.DRAFT,
-    };
-  }
-
-  // ====================================================
-  // APPROVE CASE
-  // ====================================================
-  async approveCase(
-    caseId: string,
-    dto: ApproveCaseDto,
-    userId: string,
-  ) {
-    const caseDoc =
-      await this.caseModel
-        .findById(caseId)
-        .populate('owner')
-        .populate('invitedUser');
-
-    if (!caseDoc) {
-      throw new NotFoundException(
-        'Case not found',
-      );
-    }
-
-    caseDoc.workflowStatus =
-      CaseWorkflowStatus.CM_APPROVED;
-
-    await caseDoc.save();
-
-    await this.createTimelineEntry(
-      caseId,
-      userId,
-      'CM_APPROVED',
-    );
-
-    await this.mailService.sendCaseApproved(
-      caseDoc,
-    );
-
-    return {
-      success: true,
-      status:
-        CaseWorkflowStatus.CM_APPROVED,
-    };
-  }
-
-  // ====================================================
-  // COUPLE APPROVALS
-  // ====================================================
-
-  async requestCoupleApproval(
-    caseId: string,
-    userId: string,
-  ) {
-    await this.createTimelineEntry(
-      caseId,
-      userId,
-      'COUPLE_APPROVAL_REQUESTED',
-    );
-
-    return { success: true };
-  }
 
   async uploadP1Confirmation(
     caseId: string,
@@ -629,81 +489,6 @@ export class CaseManagerService {
   // LAWYER ASSIGNMENT
   // ====================================================
 
-  async availableLawyers(caseId: string) {
-    return this.lawyerModel.find();
-  }
-
-  async assignLawyers(
-    caseId: string,
-    dto: AssignLawyersDto,
-    userId: string,
-  ) {
-    if (
-      dto.p1LawyerId === dto.p2LawyerId
-    ) {
-      throw new BadRequestException(
-        'Lawyers must be different',
-      );
-    }
-
-    const caseDoc =
-      await this.caseModel
-        .findById(caseId)
-        .populate('owner')
-        .populate('invitedUser');
-
-    if (!caseDoc) {
-      throw new NotFoundException();
-    }
-
-    const [p1Lawyer, p2Lawyer] =
-      await Promise.all([
-        this.lawyerModel.findById(
-          dto.p1LawyerId,
-        ),
-        this.lawyerModel.findById(
-          dto.p2LawyerId,
-        ),
-      ]);
-
-    if (!p1Lawyer || !p2Lawyer) {
-      throw new BadRequestException(
-        'Lawyer not found',
-      );
-    }
-
-    caseDoc.assignedLawyerP1 =
-      new Types.ObjectId(dto.p1LawyerId);
-
-    caseDoc.assignedLawyerP2 =
-      new Types.ObjectId(dto.p2LawyerId);
-
-    caseDoc.workflowStatus =
-      CaseWorkflowStatus.LAWYERS_ASSIGNED;
-
-    caseDoc.lawyersAssignedAt =
-      new Date();
-
-    caseDoc.lawyersAssignedBy =
-      new Types.ObjectId(userId);
-
-    await caseDoc.save();
-
-    await this.createTimelineEntry(
-      caseId,
-      userId,
-      'LAWYERS_ASSIGNED',
-    );
-
-    await this.mailService.sendLawyerAssignedNotification(
-      caseDoc,
-      p1Lawyer,
-      p2Lawyer,
-    );
-
-    return caseDoc;
-  }
-
 
   async addNote(
     caseId: string,
@@ -727,7 +512,7 @@ export class CaseManagerService {
     return note;
   }
 
-  async getNotes(caseId: string) {
+  async notes(caseId: string) {
     return this.noteModel
       .find({
         caseId: new Types.ObjectId(caseId),
@@ -751,6 +536,12 @@ export class CaseManagerService {
       },
     );
 
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'NOTE_DELETED',
+    );
+
     return {
       success: true,
     };
@@ -770,6 +561,19 @@ export class CaseManagerService {
     });
   }
 
+  private async createAuditLog(
+    caseId: string,
+    userId: string,
+    action: string,
+    notes?: string,
+  ) {
+    return this.auditLogModel.create({
+      caseId: new Types.ObjectId(caseId),
+      userId: new Types.ObjectId(userId),
+      action,
+      notes,
+    });
+  }
   async uploadDocument(
     caseId: string,
     file: any,
@@ -810,7 +614,7 @@ export class CaseManagerService {
     return document;
   }
 
-  async getDocuments(
+  async documents(
     caseId: string,
   ) {
     return this.documentModel
@@ -831,6 +635,12 @@ export class CaseManagerService {
   ) {
     await this.documentModel.findByIdAndDelete(
       documentId,
+    );
+
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'DOCUMENT_DELETED',
     );
 
     return {
@@ -919,7 +729,7 @@ export class CaseManagerService {
   }
 
 
-  async getVersions(
+  async versions(
     caseId: string,
   ) {
     return this.versionModel
@@ -934,8 +744,7 @@ export class CaseManagerService {
   }
 
 
-  async getVersion(
-    caseId: string,
+  async version(
     versionId: string,
   ) {
     return this.versionModel.findById(
@@ -957,7 +766,7 @@ export class CaseManagerService {
     });
   }
 
-  async getChangeSets(
+  async changeSets(
     caseId: string,
   ) {
     return this.changeSetModel.find({
@@ -966,7 +775,7 @@ export class CaseManagerService {
     });
   }
 
-  async agreementVersions(
+  async agreements(
     caseId: string,
   ) {
     return this.agreementVersionModel
@@ -1049,33 +858,21 @@ export class CaseManagerService {
       });
   }
 
-
-
-  async archiveCase(
+  async auditLog(
     caseId: string,
-    userId: string,
   ) {
-    const caseDoc =
-      await this.caseModel.findById(
-        caseId,
-      );
-
-    if (!caseDoc) {
-      throw new NotFoundException(
-        'Case not found',
-      );
-    }
-
-    caseDoc.workflowStatus =
-      CaseWorkflowStatus.ARCHIVED;
-
-    caseDoc.archivedAt =
-      new Date();
-
-    await caseDoc.save();
-
-    return caseDoc;
+    return this.auditLogModel
+      .find({
+        caseId:
+          new Types.ObjectId(caseId),
+      })
+      .populate('userId')
+      .sort({
+        createdAt: -1,
+      });
   }
+
+
 
 
   async completedCases(
@@ -1085,33 +882,376 @@ export class CaseManagerService {
   }
 
 
-  async readyForArchive(
-    userId: string,
-  ) {
-    return this.caseModel.find({
-      readyForArchive: true,
-    });
+  async stageSummary(userId: string) {
+    return {
+      lawyersAssigned:
+        await this.caseModel.countDocuments({
+          workflowStatus:
+            CaseWorkflowStatus.LAWYERS_ASSIGNED,
+        }),
+
+      review:
+        await this.caseModel.countDocuments({
+          workflowStatus:
+            CaseWorkflowStatus.LAWYER_REVIEW,
+        }),
+
+      ila:
+        await this.caseModel.countDocuments({
+          workflowStatus:
+            CaseWorkflowStatus.LAWYER_ILA_PENDING,
+        }),
+
+      signoff:
+        await this.caseModel.countDocuments({
+          workflowStatus:
+            CaseWorkflowStatus.LAWYER_SIGNOFF_COMPLETE,
+        }),
+
+      completed:
+        await this.caseModel.countDocuments({
+          workflowStatus:
+            CaseWorkflowStatus.COMPLETED,
+        }),
+    };
   }
 
-  async getCasesByStatus(
+
+  async reviewComplete(
+    caseId: string,
     userId: string,
-    status: string,
   ) {
-    return this.caseModel
-      .find({
-        assignedCaseManager: new Types.ObjectId(userId),
-        workflowStatus: status,
-      })
-      .populate('owner invitedUser assignedCaseManager')
-      .sort({ createdAt: -1 })
-      .exec();
+    const caseDoc =
+      await this.caseModel.findById(caseId);
+
+    if (!caseDoc) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    caseDoc.workflowStatus =
+      CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED;
+
+    caseDoc.lawyerReviewCompleted =
+      true;
+
+    caseDoc.lawyerReviewCompletedAt =
+      new Date();
+
+    await caseDoc.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'LAWYER_REVIEW_COMPLETED',
+    );
+
+    return caseDoc;
   }
 
-  async getAllCases(userId: string) {
-    return this.caseModel
-      .find({})
-      .populate('owner invitedUser assignedCaseManager')
-      .sort({ createdAt: -1 })
-      .exec();
+
+  async requestILA(
+    caseId: string,
+    userId: string,
+  ) {
+    const caseDoc =
+      await this.caseModel.findById(caseId);
+
+    if (!caseDoc) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    caseDoc.workflowStatus =
+      CaseWorkflowStatus.LAWYER_ILA_PENDING;
+
+    await caseDoc.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'ILA_REQUESTED',
+    );
+
+    return caseDoc;
   }
+
+  async completeP1ILA(
+    caseId: string,
+    file: any,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    c.p1ILACompleted = true;
+
+    c.p1ILACompletedAt =
+      new Date();
+
+    c.p1ILAFile =
+      file?.path ?? file?.filename;
+
+    await c.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'P1_ILA_COMPLETED',
+    );
+
+    return c;
+  }
+
+
+  async completeP2ILA(
+    caseId: string,
+    file: any,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    c.p2ILACompleted = true;
+
+    c.p2ILACompletedAt =
+      new Date();
+
+    c.p2ILAFile =
+      file?.path ?? file?.filename;
+
+    await c.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'P2_ILA_COMPLETED',
+    );
+
+    return c;
+  }
+
+  async ilaStatus(
+    caseId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    return {
+      p1ILACompleted:
+        c?.p1ILACompleted,
+
+      p2ILACompleted:
+        c?.p2ILACompleted,
+
+      p1ILACompletedAt:
+        c?.p1ILACompletedAt,
+
+      p2ILACompletedAt:
+        c?.p2ILACompletedAt,
+    };
+  }
+
+
+  async p1Signoff(
+    caseId: string,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException();
+    }
+
+    c.p1LawyerSigned = true;
+
+    c.p1LawyerSignedAt =
+      new Date();
+
+    await c.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'P1_LAWYER_SIGNOFF',
+    );
+
+    return c;
+  }
+
+  async p2Signoff(
+    caseId: string,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException();
+    }
+
+    c.p2LawyerSigned = true;
+
+    c.p2LawyerSignedAt =
+      new Date();
+
+    if (
+      c.p1LawyerSigned &&
+      c.p2LawyerSigned
+    ) {
+      c.dualLawyerSignoffCompleted =
+        true;
+
+      c.dualLawyerSignoffCompletedAt =
+        new Date();
+
+      c.workflowStatus =
+        CaseWorkflowStatus.LAWYER_CLIENT_CONFIRMATION;
+    }
+
+    await c.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'DUAL_LAWYER_SIGNOFF_COMPLETE',
+    );
+
+    return c;
+  }
+
+  async finalP1Confirmation(
+    caseId: string,
+    file: any,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    c.finalP1Confirmed = true;
+
+    c.finalP1ConfirmedAt =
+      new Date();
+
+    await c.save();
+
+    return c;
+  }
+
+
+  async finalP2Confirmation(
+    caseId: string,
+    file: any,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+ 
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }           c
+
+    c.finalP2Confirmed = true;
+
+    c.finalP2ConfirmedAt =
+      new Date();
+
+    await c.save();
+
+    return c;
+  }
+
+  async confirmations(
+    caseId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    return {
+      finalP1Confirmed:
+        c?.finalP1Confirmed,
+
+      finalP2Confirmed:
+        c?.finalP2Confirmed,
+
+      finalP1ConfirmedAt:
+        c?.finalP1ConfirmedAt,
+
+      finalP2ConfirmedAt:
+        c?.finalP2ConfirmedAt,
+    };
+  }
+
+
+  async completeCase(
+    caseId: string,
+    userId: string,
+  ) {
+    const c =
+      await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException();
+    }
+
+    if (
+      !c.finalP1Confirmed ||
+      !c.finalP2Confirmed
+    ) {
+      throw new BadRequestException(
+        'Client confirmations missing',
+      );
+    }
+
+    c.workflowStatus =
+      CaseWorkflowStatus.COMPLETED;
+
+    c.completedAt =
+      new Date();
+
+    c.readyForArchive = true;
+
+    await c.save();
+
+    await this.createTimelineEntry(
+      caseId,
+      userId,
+      'CASE_COMPLETED',
+    );
+
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'CASE_COMPLETED',
+    );
+
+    return c;
+  }
+
+
+
+
 }

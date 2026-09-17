@@ -27,7 +27,7 @@ export class AuthService {
     private config: ConfigService,
     private casesService: CasesService,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
-  ) {}
+  ) { }
 
   async registerAndSendOtp(dto: any) {
     const {
@@ -94,7 +94,7 @@ export class AuthService {
     const otp = this.generateNumericOtp(otpLength);
     const expires = new Date(
       Date.now() +
-        Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000,
+      Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000,
     );
 
     // store OTP on user
@@ -177,7 +177,7 @@ export class AuthService {
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(
       Date.now() +
-        Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
+      Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
     );
     await this.usersService.setResetToken(user._id.toString(), token, expires);
     const resetUrl = `${this.config.get('APP_BASE_URL')}/auth/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
@@ -194,58 +194,104 @@ export class AuthService {
     const hash = await this.usersService.hashPassword(newPassword);
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
-
   async acceptInvite(
     caseId: string,
     token: string,
-    email: string,
-    password?: string,
-    name?: string,
+    password: string,
   ) {
     const caseDoc = await this.casesService.findById(caseId);
-    if (!caseDoc) throw new BadRequestException('Invalid case or invite');
-
-    if (!caseDoc.inviteToken || caseDoc.inviteToken !== token)
-      throw new BadRequestException('Invalid token');
-
-    if (!caseDoc.inviteTokenExpires || caseDoc.inviteTokenExpires < new Date())
-      throw new BadRequestException('Invite expired');
+    if (!caseDoc) {
+      throw new BadRequestException(
+        'Invalid case or invite',
+      );
+    }
 
     if (
-      !caseDoc.invitedEmail ||
-      caseDoc.invitedEmail.toLowerCase() !== email.toLowerCase()
-    )
-      throw new BadRequestException('Invite email mismatch');
+      !caseDoc.inviteToken ||
+      caseDoc.inviteToken !== token
+    ) {
+      throw new BadRequestException(
+        'Invalid token',
+      );
+    }
 
-    const existing = await this.usersService.findByEmail(email);
-    if (existing) throw new BadRequestException('User already exists');
+    if (
+      !caseDoc.inviteTokenExpires ||
+      caseDoc.inviteTokenExpires < new Date()
+    ) {
+      throw new BadRequestException(
+        'Invite expired',
+      );
+    }
 
-    const userPassword = password || this.usersService.generateRandomPassword();
+    const partner =
+      caseDoc.partnerInviteDetails;
+    if (!partner?.email) {
+      throw new BadRequestException(
+        'Partner invitation details not found',
+      );
+    }
 
-    const passwordHash = await this.usersService.hashPassword(userPassword);
-    const acceptedTerms = true;
+    const email =
+      partner.email.toLowerCase();
+    const existing =
+      await this.usersService.findByEmail(
+        email,
+      );
+
+    if (existing) {
+      throw new BadRequestException(
+        'User already exists',
+      );
+    }
+
+    const fullName = [
+      partner.firstName,
+      partner.lastName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
+    const passwordHash =
+      await this.usersService.hashPassword(
+        password,
+      );
 
     let user;
+
     try {
-      user = await this.usersService.create({
-        email: email.toLowerCase(),
-        passwordHash,
-        name,
-        role: 'end_user',
-        endUserType: 'user2',
-        invitedBy: caseDoc.owner,
-        inviteCaseId: caseDoc._id,
-        acceptedTerms: acceptedTerms,
-        emailVerified: true,
-      } as any);
+      user =
+        await this.usersService.create({
+          email,
+          passwordHash,
+          firstName: partner.firstName,
+          lastName: partner.lastName,
+          role: 'end_user',
+          endUserType: 'user2',
+          invitedBy: caseDoc.owner,
+          inviteCaseId: caseDoc._id,
+          acceptedTerms: true,
+          emailVerified: true,
+        } as any);
     } catch (err) {
-      this.logger?.error?.('User creation failed in acceptInvite', err as any);
-      throw new BadRequestException('Failed to create invited user');
+      this.logger?.error?.(
+        'User creation failed in acceptInvite',
+        err as any,
+      );
+
+      throw new BadRequestException(
+        'Failed to create invited user',
+      );
     }
 
     await this.userModel.updateOne(
       { _id: caseDoc.owner },
-      { $set: { invitedUser: user._id } },
+      {
+        $set: {
+          invitedUser: user._id,
+        },
+      },
     );
 
     const createdId =
@@ -256,22 +302,34 @@ export class AuthService {
           : null;
 
     if (!createdId) {
-      this.logger?.error?.('Created user missing _id or id', { user });
-      throw new BadRequestException('User creation did not return id');
+      this.logger?.error?.(
+        'Created user missing _id or id',
+        { user },
+      );
+
+      throw new BadRequestException(
+        'User creation did not return id',
+      );
     }
 
-    await this.casesService.attachInvitedUser(caseId, createdId);
+    await this.casesService.attachInvitedUser(
+      caseId,
+      createdId,
+    );
 
-    await this.casesService.setInviteCredentials(caseId, {
-      email: email.toLowerCase(),
-      password: userPassword,
-      createdAt: new Date(),
-    });
+    await this.casesService.setInviteCredentials(
+      caseId,
+      {
+        email,
+        password,
+        createdAt: new Date(),
+      },
+    );
 
     try {
       await this.mailService.sendInviteCredentials(
         email,
-        userPassword,
+        password,
         caseDoc._id.toString(),
       );
     } catch (err) {
@@ -283,7 +341,6 @@ export class AuthService {
 
     return this.signUser(user);
   }
-
   async getUserProfile(id: string): Promise<User> {
     const user = await this.usersService.findById(id);
     if (!user) {

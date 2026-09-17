@@ -20,6 +20,7 @@ import {
 
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { MailService } from '../mail/mail.service';
+import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -186,67 +187,48 @@ export class CasesService {
 
   private determineWorkflowStatus(
     c: CaseDocument,
-  ): string {
+  ): CaseWorkflowStatus {
 
     if (!c.paymentCompleted) {
-      return 'NOT_PAID';
+      return CaseWorkflowStatus.NOT_PAID;
     }
 
     if (
-      !this.areAllSectionsSubmitted(c)
+      !c.approval?.user1Approved ||
+      !c.approval?.user2Approved
     ) {
-      return 'DRAFT';
-    }
-
-    const usersApproved =
-      c.approval?.user1Approved &&
-      c.approval?.user2Approved;
-
-    if (!usersApproved) {
-      return 'COUPLE_SUBMITTED';
+      return CaseWorkflowStatus.DRAFT;
     }
 
     if (
-      !c.approval?.caseManagerApproved
+      c.approval.user1Approved &&
+      c.approval.user2Approved &&
+      !c.approval.caseManagerApproved
     ) {
-      return 'CM_APPROVED';
-    }
-
-    const p1Submitted =
-      c.preQuestionnaireUser1?.submitted;
-
-    const p2Submitted =
-      c.preQuestionnaireUser2?.submitted;
-
-    if (
-      !p1Submitted ||
-      !p2Submitted
-    ) {
-      return 'PRE_LAWYER_PENDING';
-    }
-
-    const p1Lawyer =
-      c.preQuestionnaireUser1
-        ?.selectedLawyer;
-
-    const p2Lawyer =
-      c.preQuestionnaireUser2
-        ?.selectedLawyer;
-
-    if (
-      !p1Lawyer ||
-      !p2Lawyer
-    ) {
-      return 'LAWYERS_ASSIGNED';
+      return CaseWorkflowStatus.COUPLE_SUBMITTED;
     }
 
     if (
-      !c.approval?.lawyerApproved
+      c.approval.caseManagerApproved
     ) {
-      return 'LEGAL_REVIEW';
+      return CaseWorkflowStatus.CM_APPROVED;
     }
 
-    return 'READY_FOR_SIGNATURE';
+    return CaseWorkflowStatus.DRAFT;
+  }
+
+  async getCasesByStatus(
+    userId: string,
+    status: string,
+  ) {
+    return this.caseModel
+      .find({
+        assignedCaseManager: new Types.ObjectId(userId),
+        workflowStatus: status,
+      })
+      .populate('owner invitedUser assignedCaseManager')
+      .sort({ createdAt: -1 })
+      .exec();
   }
 
 

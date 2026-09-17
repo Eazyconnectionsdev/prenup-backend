@@ -3,6 +3,7 @@ import { Body, Controller, ForbiddenException, Get, Param, Post, Req, UseGuards,
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { CasesService } from './cases.service';
 import { CreateCaseDto } from './dto/create-case.dto';
+import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { LawyersService } from './lawyer.service';
 
 @Controller('cases')
@@ -26,7 +27,6 @@ export class CasesController {
     return this.casesService.create(user.id, title);
   }
 
-
   @UseGuards(JwtAuthGuard)
   @Get()
   async list(@Req() req) {
@@ -37,8 +37,7 @@ export class CasesController {
     }
     return this.casesService.findByUser(user.id);
   }
-
-
+  
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findById(@Req() req, @Param('id') id: string) {
@@ -47,22 +46,49 @@ export class CasesController {
     if (!c) throw new NotFoundException('Case not found');
 
     return c;
-  }
+  } 
+  
+  //  @UseGuards(JwtAuthGuard)
+  // @Post(':id/invite')
+  // async invite(
+  //   @Req() req,
+  //   @Param('id') id: string,
+  //   @Body() dto: InvitePartnerDto,
+  // ) {
+  //   console.log('RAW BODY:', req.body);
 
 
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/invite')
-  async invite(@Req() req, @Param('id') id: string, @Body('email') email: string) {
-    const user = this.ensureUser(req);
-    const c = await this.casesService.findById(id);
-    if (!c) throw new NotFoundException('Case not found');
-    const isPrivileged = this.isPrivilegedRole(user.role);
-    const userIdStr = (user.id ?? user._id)?.toString();
-    if (!(isPrivileged || c.owner?.toString() === userIdStr)) {
-      throw new ForbiddenException('Forbidden');
-    }
-    return this.casesService.invite(id, user.id, email);
-  }
+
+  //   const user = this.ensureUser(req);
+
+  //   const c = await this.casesService.findById(id);
+
+  //   if (!c) {
+  //     throw new NotFoundException('Case not found');
+  //   }
+
+  //   const isPrivileged = this.isPrivilegedRole(user.role);
+
+  //   const userIdStr =
+  //     (user.id ?? user._id)?.toString();
+
+  //   if (
+  //     !(
+  //       isPrivileged ||
+  //       c.owner?.toString() === userIdStr
+  //     )
+  //   ) {
+  //     throw new ForbiddenException(
+  //       'Forbidden',
+  //     );
+  //   }
+
+  //   return this.casesService.invite(
+  //     id,
+  //     user.id,
+  //     dto,
+  //   );
+  // }
 
 
   @UseGuards(JwtAuthGuard)
@@ -127,51 +153,120 @@ export class CasesController {
   }
 
 
+  // @UseGuards(JwtAuthGuard)
+  // @Post(':id/payment-completed')
+  // async paymentCompleted(
+  //   @Req() req,
+  //   @Param('id') id: string,
+  // ) {
+  //   const user =
+  //     this.ensureUser(req);
+
+  //   return this.casesService
+  //     .markPaymentCompleted(
+  //       id,
+  //       user.id,
+  //     );
+  // }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/approve')
+  async approveCase(
+    @Req() req,
+    @Param('id') id: string,
+  ) {
+    const user =
+      this.ensureUser(req);
+
+    return this.casesService
+      .approveCaseByUser(
+        id,
+        user.id,
+      );
+  }
+
+  // @UseGuards(JwtAuthGuard)
+  // @Post(':id/reject')
+  // async rejectCase(
+  //   @Req() req,
+  //   @Param('id') id: string,
+  //   @Body('reason')
+  //   reason: string,
+  // ) {
+  //   const user =
+  //     this.ensureUser(req);
+
+  //   return this.casesService
+  //     .rejectCaseByUser(
+  //       id,
+  //       user.id,
+  //       reason,
+  //     );
+  // }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/status')
+  async getStatus(
+    @Param('id') id: string,
+  ) {
+    const c =
+      await this.casesService.findById(id);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    return {
+      workflowStatus:
+        c.workflowStatus,
+    };
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get(':id/lawyers')
-  async getLawyersForCase(@Req() req, @Param('id') id: string) {
-    const user = this.ensureUser(req);
-    const isPrivileged = this.isPrivilegedRole(user.role);
-    const c = await this.casesService.findById(id);
-    if (!c) throw new NotFoundException('Case not found');
-    if (!isPrivileged) {
-      const userIdStr = (user.id ?? user._id)?.toString();
-      if (c.owner?.toString() !== userIdStr && c.invitedUser?.toString() !== userIdStr) {
-        throw new ForbiddenException('Forbidden');
-      }
-    }
-    if (!isPrivileged) {
-      const allSectionsSubmitted =
-        this.casesService.areAllSectionsSubmitted(c);
+  async getLawyersForCase(
+    @Req() req,
+    @Param('id') id: string,
+  ) {
+    const user =
+      this.ensureUser(req);
 
-      if (
-        !c.fullyLocked ||
-        !allSectionsSubmitted
-      ) {
-      }
-      const lawyers = await this.lawyersService.listAll();
-      const p1SelectedId = c.preQuestionnaireUser1?.selectedLawyer?.toString() ?? null;
-      const p2SelectedId = c.preQuestionnaireUser2?.selectedLawyer?.toString() ?? null;
-      const userIdStr = (user.id ?? user._id)?.toString();
-      const isOwner = c.owner?.toString() === userIdStr;
-      const isInvited = c.invitedUser?.toString() === userIdStr;
-      const mapped = lawyers.map((l: any) => {
-        const lid = l._id.toString();
-        const selectedByUser1 = p1SelectedId === lid;
-        const selectedByUser2 = p2SelectedId === lid;
-        let selectedBy: 'you' | 'partner' | 'both' | null = null;
-        if (selectedByUser1 && selectedByUser2) {
-          selectedBy = 'both';
-        } else if (selectedByUser1) {
-          selectedBy = isOwner ? 'you' : 'partner';
-        } else if (selectedByUser2) {
-          selectedBy = isInvited ? 'you' : 'partner';
-        }
-        return { id: lid, externalId: l.externalId, name: l.name, priceText: l.priceText, avatarUrl: l.avatarUrl, selectedBy };
-      });
-      return { total: mapped.length, lawyers: mapped, yourSelected: isOwner ? p1SelectedId : p2SelectedId, partnerSelected: isOwner ? p2SelectedId : p1SelectedId };
+    const c =
+      await this.casesService.findById(id);
+
+    if (!c) {
+      throw new NotFoundException(
+        'Case not found',
+      );
     }
-   
+
+    const userIdStr =
+      (user.id ?? user._id)?.toString();
+
+    const isPrivileged =
+      this.isPrivilegedRole(user.role);
+
+    if (
+      !isPrivileged &&
+      c.owner?.toString() !==
+      userIdStr &&
+      c.invitedUser?.toString() !==
+      userIdStr
+    ) {
+      throw new ForbiddenException(
+        'Forbidden',
+      );
+    }
+
+    const lawyers =
+      await this.lawyersService.listAll();
+
+    return {
+      total: lawyers.length,
+      lawyers,
+    };
   }
 
 
