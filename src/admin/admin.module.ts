@@ -12,7 +12,6 @@ import { Enquiry, EnquirySchema } from './schemas/enquiry.schema';
       { name: Company.name, schema: CompanySchema },
       { name: Lawyer.name, schema: LawyerSchema },
       { name: Enquiry.name, schema: EnquirySchema },
-      // NOTE: User model assumed to exist elsewhere in the app
       { name: 'User', schema: undefined as any },
     ]),
   ],

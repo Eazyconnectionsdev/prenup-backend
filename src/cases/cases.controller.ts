@@ -9,6 +9,7 @@ import { LawyersService } from './lawyer.service';
 @Controller('cases')
 export class CasesController {
   constructor(private casesService: CasesService, private lawyersService: LawyersService) { }
+ 
   private ensureUser(req: any) {
     const user = req.user;
     if (!user) throw new UnauthorizedException('Authentication required');
@@ -17,6 +18,7 @@ export class CasesController {
   private isPrivilegedRole(role?: string) {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
+
   @UseGuards(JwtAuthGuard)
   @Post()
   async create(@Req() req, @Body() body: CreateCaseDto) {
@@ -46,48 +48,49 @@ export class CasesController {
     return c;
   } 
   
-   @UseGuards(JwtAuthGuard)
-  @Post(':id/invite')
-  async invite(
-    @Req() req,
-    @Param('id') id: string,
-    @Body() dto: InvitePartnerDto,
-  ) {
-    console.log('RAW BODY:', req.body);
-
-console.log('DTO:', dto);
+  //  @UseGuards(JwtAuthGuard)
+  // @Post(':id/invite')
+  // async invite(
+  //   @Req() req,
+  //   @Param('id') id: string,
+  //   @Body() dto: InvitePartnerDto,
+  // ) {
+  //   console.log('RAW BODY:', req.body);
 
 
-    const user = this.ensureUser(req);
 
-    const c = await this.casesService.findById(id);
+  //   const user = this.ensureUser(req);
 
-    if (!c) {
-      throw new NotFoundException('Case not found');
-    }
+  //   const c = await this.casesService.findById(id);
 
-    const isPrivileged = this.isPrivilegedRole(user.role);
+  //   if (!c) {
+  //     throw new NotFoundException('Case not found');
+  //   }
 
-    const userIdStr =
-      (user.id ?? user._id)?.toString();
+  //   const isPrivileged = this.isPrivilegedRole(user.role);
 
-    if (
-      !(
-        isPrivileged ||
-        c.owner?.toString() === userIdStr
-      )
-    ) {
-      throw new ForbiddenException(
-        'Forbidden',
-      );
-    }
+  //   const userIdStr =
+  //     (user.id ?? user._id)?.toString();
 
-    return this.casesService.invite(
-      id,
-      user.id,
-      dto,
-    );
-  }
+  //   if (
+  //     !(
+  //       isPrivileged ||
+  //       c.owner?.toString() === userIdStr
+  //     )
+  //   ) {
+  //     throw new ForbiddenException(
+  //       'Forbidden',
+  //     );
+  //   }
+
+  //   return this.casesService.invite(
+  //     id,
+  //     user.id,
+  //     dto,
+  //   );
+  // }
+
+
   @UseGuards(JwtAuthGuard)
   @Post(':id/attach-invited')
   async attachInvitedUser(@Req() req, @Param('id') id: string) {
@@ -150,21 +153,21 @@ console.log('DTO:', dto);
   }
 
 
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/payment-completed')
-  async paymentCompleted(
-    @Req() req,
-    @Param('id') id: string,
-  ) {
-    const user =
-      this.ensureUser(req);
+  // @UseGuards(JwtAuthGuard)
+  // @Post(':id/payment-completed')
+  // async paymentCompleted(
+  //   @Req() req,
+  //   @Param('id') id: string,
+  // ) {
+  //   const user =
+  //     this.ensureUser(req);
 
-    return this.casesService
-      .markPaymentCompleted(
-        id,
-        user.id,
-      );
-  }
+  //   return this.casesService
+  //     .markPaymentCompleted(
+  //       id,
+  //       user.id,
+  //     );
+  // }
 
   @UseGuards(JwtAuthGuard)
   @Post(':id/approve')
@@ -182,24 +185,24 @@ console.log('DTO:', dto);
       );
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/reject')
-  async rejectCase(
-    @Req() req,
-    @Param('id') id: string,
-    @Body('reason')
-    reason: string,
-  ) {
-    const user =
-      this.ensureUser(req);
+  // @UseGuards(JwtAuthGuard)
+  // @Post(':id/reject')
+  // async rejectCase(
+  //   @Req() req,
+  //   @Param('id') id: string,
+  //   @Body('reason')
+  //   reason: string,
+  // ) {
+  //   const user =
+  //     this.ensureUser(req);
 
-    return this.casesService
-      .rejectCaseByUser(
-        id,
-        user.id,
-        reason,
-      );
-  }
+  //   return this.casesService
+  //     .rejectCaseByUser(
+  //       id,
+  //       user.id,
+  //       reason,
+  //     );
+  // }
 
   @UseGuards(JwtAuthGuard)
   @Get(':id/status')
@@ -266,4 +269,16 @@ console.log('DTO:', dto);
     };
   }
 
+
+  // generateAgreementDocument endpoint
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/approve-and-generate')
+  async approveAndGenerate(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    return this.casesService.generateAgreementDocument(
+      id,
+      (user.id ?? user._id)?.toString(),
+    );
+  }
 }

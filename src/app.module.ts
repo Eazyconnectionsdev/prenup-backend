@@ -1,3 +1,4 @@
+import { Config } from './config';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
@@ -8,19 +9,27 @@ import { MailModule } from './mail/mail.module';
 import { LawyerModule } from './cases/lawyer-manager/lawyer.module';
 import { CaseManagerModule } from './cases/case-manager/case-manager.module';
 import { AdminModule } from './admin/admin.module';
+import { AgreementModule } from './agreement/agreement.module';
+import { AuditLogModule } from './common/audit-log/audit-log.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    MongooseModule.forRoot(process.env.MONGODB_URI || 'mongodb://localhost:27017/ezconnection', {
-      // mongoose options as needed
-    }),
+    MongooseModule.forRoot(Config.mongoURI),
+    EventEmitterModule.forRoot(),
     UsersModule,
     AuthModule,
     CasesModule,
+    AgreementModule,
     MailModule,
     AdminModule,
     CaseManagerModule,
+
+    // AuditLogModule for All Global Files
+    AuditLogModule,
+
     LawyerModule
   ],
 })

@@ -24,7 +24,7 @@ export class Lawyer {
 
   // New: reference to Company
   @Prop({ type: Types.ObjectId, ref: 'Company', required: true })
-  company: Types.ObjectId | Company;
+  company?: Types.ObjectId | Company;
 
   // Additional contact fields
   @Prop()
