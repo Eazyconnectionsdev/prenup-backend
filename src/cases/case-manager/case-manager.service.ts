@@ -33,13 +33,19 @@ import {
   CaseTimeline,
 } from '../../cases/schemas/case_timeline.schema';
 
+import {
+  CaseAuditLog,
+} from '../../cases/schemas/case_audit_logs.schema';
+
+import {
+  AgreementVersion,
+} from '../../cases/schemas/agreement_versions.schema';
 
 import {
   CaseChangeSet,
 } from '../../cases/schemas/case_changesets.schema';
 
 import { MailService } from '../../mail/mail.service';
-import { AgreementVersion } from '../schemas/agreement_versions.schema';
 @Injectable()
 export class CaseManagerService {
   constructor(
@@ -56,6 +62,9 @@ export class CaseManagerService {
 
     @InjectModel(CaseTimeline.name)
     private readonly timelineModel: Model<CaseTimeline>,
+
+    @InjectModel(CaseAuditLog.name)
+    private readonly auditLogModel: Model<CaseAuditLog>,
 
     @InjectModel(AgreementVersion.name)
     private readonly agreementVersionModel: Model<AgreementVersion>,
@@ -425,6 +434,13 @@ export class CaseManagerService {
       dto.reason,
     );
 
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'RETURN_TO_DRAFT',
+      dto.reason,
+    );
+
     await this.mailService.sendCaseReturnedToDraft(
       caseDoc,
       dto.reason,
@@ -751,6 +767,12 @@ export class CaseManagerService {
       },
     );
 
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'NOTE_DELETED',
+    );
+
     return {
       success: true,
     };
@@ -770,6 +792,19 @@ export class CaseManagerService {
     });
   }
 
+  private async createAuditLog(
+    caseId: string,
+    userId: string,
+    action: string,
+    notes?: string,
+  ) {
+    return this.auditLogModel.create({
+      caseId: new Types.ObjectId(caseId),
+      userId: new Types.ObjectId(userId),
+      action,
+      notes,
+    });
+  }
   async uploadDocument(
     caseId: string,
     file: any,
@@ -831,6 +866,12 @@ export class CaseManagerService {
   ) {
     await this.documentModel.findByIdAndDelete(
       documentId,
+    );
+
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'DOCUMENT_DELETED',
     );
 
     return {
@@ -1049,6 +1090,19 @@ export class CaseManagerService {
       });
   }
 
+  async auditLog(
+    caseId: string,
+  ) {
+    return this.auditLogModel
+      .find({
+        caseId:
+          new Types.ObjectId(caseId),
+      })
+      .populate('userId')
+      .sort({
+        createdAt: -1,
+      });
+  }
 
 
   async archiveCase(
@@ -1073,6 +1127,12 @@ export class CaseManagerService {
       new Date();
 
     await caseDoc.save();
+
+    await this.createAuditLog(
+      caseId,
+      userId,
+      'CASE_ARCHIVED',
+    );
 
     return caseDoc;
   }

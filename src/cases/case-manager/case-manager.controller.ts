@@ -437,6 +437,15 @@ async getAllCases() {
     );
   }
 
+  @Get(':caseId/audit-log')
+  async auditLog(
+    @Param('caseId') caseId: string,
+  ) {
+    return this.caseManagerService.auditLog(
+      caseId,
+    );
+  }
+
   @Post(':caseId/archive')
   async archiveCase(
     @Req() req,

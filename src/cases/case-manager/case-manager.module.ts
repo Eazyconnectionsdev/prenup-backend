@@ -34,6 +34,16 @@ import {
 } from '../../cases/schemas/case_timeline.schema';
 
 import {
+  CaseAuditLog,
+  CaseAuditLogSchema,
+} from '../../cases/schemas/case_audit_logs.schema';
+
+import {
+  AgreementVersion,
+  AgreementVersionSchema,
+} from '../../cases/schemas/agreement_versions.schema';
+
+import {
   CaseChangeSet,
   CaseChangeSetSchema,
 } from '../../cases/schemas/case_changesets.schema';
@@ -74,6 +84,17 @@ import { CaseManagerService } from './case-manager.service';
         name: CaseTimeline.name,
         schema: CaseTimelineSchema,
       },
+
+      {
+        name: CaseAuditLog.name,
+        schema: CaseAuditLogSchema,
+      },
+
+      {
+        name: AgreementVersion.name,
+        schema: AgreementVersionSchema,
+      },
+
       {
         name: CaseChangeSet.name,
         schema: CaseChangeSetSchema,
