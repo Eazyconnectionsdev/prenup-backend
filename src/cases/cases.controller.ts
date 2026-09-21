@@ -35,7 +35,7 @@ export class CasesController {
     }
     return this.casesService.findByUser(user.id);
   }
-  
+
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findById(@Req() req, @Param('id') id: string) {
@@ -44,9 +44,9 @@ export class CasesController {
     if (!c) throw new NotFoundException('Case not found');
 
     return c;
-  } 
-  
-   @UseGuards(JwtAuthGuard)
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post(':id/invite')
   async invite(
     @Req() req,
@@ -55,7 +55,7 @@ export class CasesController {
   ) {
     console.log('RAW BODY:', req.body);
 
-console.log('DTO:', dto);
+    console.log('DTO:', dto);
 
 
     const user = this.ensureUser(req);
@@ -265,5 +265,52 @@ console.log('DTO:', dto);
       lawyers,
     };
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/create-case-backup')
+  async createQuestionnaireBackup(
+    @Req() req,
+    @Param('id') id: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    const isPrivileged =
+      this.isPrivilegedRole(user.role);
+
+    if (!isPrivileged) {
+      throw new ForbiddenException(
+        'Only case managers may edit questionnaires',
+      );
+    }
+
+    return this.casesService.createQuestionnaireBackup(
+      id,
+      user.id,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+@Post(':id/revert-case-backup')
+async revertQuestionnaire(
+  @Req() req,
+  @Param('id') id: string,
+) {
+  const user = this.ensureUser(req);
+
+  const isPrivileged =
+    this.isPrivilegedRole(user.role);
+
+  if (!isPrivileged) {
+    throw new ForbiddenException(
+      'Only case managers may revert questionnaires',
+    );
+  }
+
+  return this.casesService.revertQuestionnaire(
+    id,
+    user.id,
+  );
+}
+
 
 }
