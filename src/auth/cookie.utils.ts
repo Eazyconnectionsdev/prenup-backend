@@ -4,7 +4,7 @@ export const COOKIE_DOMAIN = isProd ? '.letsprenup.co.uk' : undefined;
 
 export const DEFAULT_COOKIE_OPTIONS = {
 httpOnly: true,
-secure: isProd, // require HTTPS in production
+secure: isProd,
 sameSite: isProd ? ('none' as const) : ('lax' as const),
 domain: COOKIE_DOMAIN,
 path: '/',

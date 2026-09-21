@@ -1,4 +1,3 @@
-// src/auth/auth.service.ts
 import {
   Injectable,
   BadRequestException,
@@ -119,6 +118,7 @@ export class AuthService {
 
   async verifyRegistrationOtp(email: string, otp: string): Promise<any> {
     const normalizedEmail = email?.toLowerCase?.();
+
     if (!normalizedEmail) throw new BadRequestException('Email required');
 
     const user = await this.usersService.findByEmail(normalizedEmail);
@@ -128,6 +128,7 @@ export class AuthService {
       throw new BadRequestException('Invalid OTP');
     }
     if (
+
       !user.emailVerificationOtpExpires ||
       user.emailVerificationOtpExpires < new Date()
     ) {
@@ -188,6 +189,7 @@ export class AuthService {
     const user = await this.usersService.findByEmail(email);
     if (!user) throw new NotFoundException('User not found');
     if (!user.resetPasswordToken || user.resetPasswordToken !== token)
+
       throw new BadRequestException('Invalid token');
     if (!user.resetPasswordExpires || user.resetPasswordExpires < new Date())
       throw new BadRequestException('Token expired');
@@ -204,6 +206,7 @@ export class AuthService {
       throw new BadRequestException(
         'Invalid case or invite',
       );
+
     }
 
     if (
@@ -213,6 +216,7 @@ export class AuthService {
       throw new BadRequestException(
         'Invalid token',
       );
+
     }
 
     if (
@@ -224,11 +228,15 @@ export class AuthService {
       );
     }
 
+
     const partner =
+
       caseDoc.partnerInviteDetails;
+
     if (!partner?.email) {
       throw new BadRequestException(
         'Partner invitation details not found',
+
       );
     }
 
@@ -250,6 +258,7 @@ export class AuthService {
       partner.lastName,
     ]
       .filter(Boolean)
+
       .join(' ')
       .trim();
 
@@ -261,11 +270,13 @@ export class AuthService {
     let user;
 
     try {
+
       user =
         await this.usersService.create({
           email,
           passwordHash,
           firstName: partner.firstName,
+
           lastName: partner.lastName,
           role: 'end_user',
           endUserType: 'user2',
@@ -288,17 +299,21 @@ export class AuthService {
     await this.userModel.updateOne(
       { _id: caseDoc.owner },
       {
+
         $set: {
           invitedUser: user._id,
         },
+
       },
     );
+
 
     const createdId =
       user && (user as any)._id
         ? (user as any)._id.toString()
         : user && (user as any).id
           ? (user as any).id.toString()
+
           : null;
 
     if (!createdId) {
@@ -319,11 +334,13 @@ export class AuthService {
 
     await this.casesService.setInviteCredentials(
       caseId,
+
       {
         email,
         password,
         createdAt: new Date(),
       },
+
     );
 
     try {
@@ -335,9 +352,12 @@ export class AuthService {
     } catch (err) {
       this.logger?.error?.(
         'Failed to send invite credentials email',
+
         err as any,
+
       );
     }
+
 
     return this.signUser(user);
   }
@@ -385,6 +405,7 @@ export class AuthService {
   //
   // Utilities
   //
+
 
   signUser(user: any): any {
     const payload = { id: user._id.toString(), role: user.role };
