@@ -9,6 +9,7 @@ import { MailModule } from '../mail/mail.module';
 import { UsersModule } from '../users/users.module';
 import { Lawyer, LawyerSchema } from './schemas/lawyer.schema';
 import { Company, CompanySchema } from './schemas/company.schema';
+import { CaseBackup, CaseBackupSchema } from './schemas/case_backup.schema';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { Company, CompanySchema } from './schemas/company.schema';
       { name: Lawyer.name, schema: LawyerSchema },
       { name: Lawyer.name, schema: LawyerSchema },
       { name: Company.name, schema: CompanySchema },
+      { name: CaseBackup.name, schema: CaseBackupSchema },
     ]),
     MailModule,
     UsersModule,

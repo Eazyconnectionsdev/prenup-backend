@@ -19,19 +19,14 @@ import {
 } from './schemas/case.schema';
 
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
+import { CaseBackup, CaseBackupDocument } from './schemas/case_backup.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 
 @Injectable()
 export class CasesService {
-  private DUMMY_AGREEMENT_DRIVE_LINK =
-    'https://drive.google.com/file/d/FAKE_GOOGLE_DRIVE_ID/view';
-  constructor(
-    @InjectModel(Case.name) private caseModel: Model<CaseDocument>,
-    @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>,
-    private config: ConfigService,
-    private mailService: MailService,
-  ) {}
+  private DUMMY_AGREEMENT_DRIVE_LINK = 'https://drive.google.com/file/d/FAKE_GOOGLE_DRIVE_ID/view';
+  constructor(@InjectModel(Case.name) private caseModel: Model<CaseDocument>, @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>, private config: ConfigService, private mailService: MailService, @InjectModel(CaseBackup.name,) private questionnaireBackupModel: Model<CaseBackupDocument>) { }
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
@@ -1273,4 +1268,89 @@ Wenup
       .sort({ createdAt: -1 })
       .exec();
   }
+
+
+  async createQuestionnaireBackup(
+    caseId: string,
+    userId: string,
+  ) {
+    const caseDoc =
+      await this.caseModel.findById(caseId);
+
+    if (!caseDoc) {
+      throw new NotFoundException(
+        'Case not found',
+      );
+    }
+
+    await this.questionnaireBackupModel.create({
+      caseId,
+      createdBy: userId,
+
+      snapshot: {
+        myInformation:
+          caseDoc.myInformation,
+
+        partnerInformation:
+          caseDoc.partnerInformation,
+
+        jointInformation:
+          caseDoc.jointInformation,
+
+        workflowStatus:
+          caseDoc.workflowStatus,
+      },
+    });
+
+    return {
+      success: true,
+      message:
+        'Questionnaire backup created',
+    };
+  }
+
+  async revertQuestionnaire(
+    caseId: string,
+    userId: string,
+  ) {
+    const backup =
+      await this.questionnaireBackupModel
+        .findOne({
+          caseId,
+        })
+        .sort({
+          createdAt: -1,
+        });
+
+    if (!backup) {
+      throw new NotFoundException(
+        'No questionnaire backup found',
+      );
+    }
+
+    await this.caseModel.findByIdAndUpdate(
+      caseId,
+      {
+        myInformation:
+          backup.snapshot.myInformation,
+
+        partnerInformation:
+          backup.snapshot.partnerInformation,
+
+        jointInformation:
+          backup.snapshot.jointInformation,
+
+        workflowStatus:
+          backup.snapshot.workflowStatus,
+      },
+    );
+
+    return {
+      success: true,
+      message:
+        'Questionnaire restored from backup',
+    };
+  }
+
+
 }
