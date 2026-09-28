@@ -33,6 +33,7 @@ import {
   AuditModule as AuditModuleEnum,
 } from '../common/audit-log/enum/audit-action.enum';
 import { DiffParagraph, diffParagraphs, extractParagraphs } from 'src/utils/difference.util';
+import { User, UserDocument } from 'src/users/schemas/user.schema';
 
 const DOCX_MIME_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -43,6 +44,8 @@ enum AgreementStage {
   CM = 2,
   LAWYER = 3,
 }
+
+type CaseActorRole = 'OWNER' | 'INVITED_USER' | 'CASE_MANAGER' | 'ADMIN' | 'LAWYER_P1' | 'LAWYER_P2';
 
 export interface VersionResult {
   success: boolean;
@@ -79,6 +82,8 @@ interface DocxAndPdfUpload {
 @Injectable()
 export class AgreementService {
   constructor(
+    @InjectModel(User.name)
+    private userModel: Model<UserDocument>,
     @InjectModel(AgreementVersion.name)
     private documentVersion: Model<AgreementDocument>,
     @InjectModel(Case.name)
@@ -95,7 +100,8 @@ export class AgreementService {
     caseId: string,
     actorId: string,
   ): Promise<VersionResult> {
-    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId);
+
+    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId, ['OWNER']);
 
     const buffer = await buildAgreementDocxBuffer({
       caseId: c._id.toString(),
@@ -192,7 +198,8 @@ export class AgreementService {
     caseId: string,
     actorId: string,
   ): Promise<VersionResult> {
-    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId);
+
+    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId, ['CASE_MANAGER']);
 
     const buffer = await buildAgreementDocxBuffer({
       caseId: c._id.toString(),
@@ -823,24 +830,73 @@ async compareVersions(
     };
   }
 
-  private async validateCaseAndActor(caseId: string, actorId: string) {
-    if (!Types.ObjectId.isValid(caseId)) {
-      throw new BadRequestException('Invalid case id');
-    }
 
-    const c = await this.caseModel.findById(caseId).exec();
-    if (!c) throw new NotFoundException('Case not found');
-
-    if (!Types.ObjectId.isValid(actorId)) {
-      throw new BadRequestException('Invalid actor id');
-    }
-    const actorObjId = new Types.ObjectId(actorId);
-    const isOwner = c.owner?.toString() === actorObjId.toString();
-    const isInvited = c.invitedUser?.toString() === actorObjId.toString();
-    if (!isOwner && !isInvited) {
-      throw new ForbiddenException('Actor not part of this case');
-    }
-
-    return { c, actorObjId };
+private async validateCaseAndActor(
+  caseId: string,
+  actorId: string,
+  allowedRoles?: CaseActorRole[],
+): Promise<{ c: CaseDocument; actorObjId: Types.ObjectId; role: CaseActorRole }> {
+  if (!Types.ObjectId.isValid(caseId)) {
+    throw new BadRequestException('Invalid case id');
   }
+
+  const c = await this.caseModel.findById(caseId).exec();
+  if (!c) throw new NotFoundException('Case not found');
+
+  if (!Types.ObjectId.isValid(actorId)) {
+    throw new BadRequestException('Invalid actor id');
+  }
+
+  const actorObjId = new Types.ObjectId(actorId);
+  const actorIdStr = actorObjId.toString();
+
+  const actorUser = await this.userModel.findById(actorObjId).exec();
+  if (!actorUser) {
+    throw new ForbiddenException('Actor not found');
+  }
+
+  let matchedRole: CaseActorRole | null = null;
+
+  switch (actorUser.role) {
+    case 'superadmin':
+    case 'admin':
+      matchedRole = 'ADMIN';
+      break;
+
+    case 'case_manager':
+      matchedRole = 'CASE_MANAGER';
+      break;
+
+    case 'lawyer': {
+      const p1LawyerId = (c as any).assignedLawyerP1?.toString();
+      const p2LawyerId = (c as any).assignedLawyerP2?.toString();
+
+      if (p1LawyerId === actorIdStr) {
+        matchedRole = 'LAWYER_P1';
+      } else if (p2LawyerId === actorIdStr) {
+        matchedRole = 'LAWYER_P2';
+      }
+      break;
+    }
+
+    case 'end_user': {
+      if (c.owner?.toString() === actorIdStr) {
+        matchedRole = 'OWNER';
+      } else if (c.invitedUser?.toString() === actorIdStr) {
+        matchedRole = 'INVITED_USER';
+      }
+      break;
+    }
+  }
+
+  if (!matchedRole) {
+    throw new ForbiddenException('Actor not part of this case');
+  }
+
+  if (allowedRoles && !allowedRoles.includes(matchedRole)) {
+    throw new ForbiddenException(`Actor role ${matchedRole} is not permitted for this action`);
+  }
+
+  return { c, actorObjId, role: matchedRole };
+}
 }

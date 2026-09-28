@@ -15,10 +15,12 @@ import {
   AgreementLock,
   AgreementLockSchema,
 } from './schemas/agreement_lock.schema';
+import { User, UserSchema } from 'src/users/schemas/user.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
       { name: AgreementVersion.name, schema: AgreementVersionSchema },
       { name: AgreementLock.name, schema: AgreementLockSchema },
       { name: Case.name, schema: CaseSchema },

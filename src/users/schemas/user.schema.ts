@@ -6,10 +6,10 @@ export type UserDocument = User & Document;
 @Schema({ timestamps: true })
 export class User {
   @Prop({ required: true, unique: true, lowercase: true })
-  email: string;
+  email!: string;
 
   @Prop({ required: true })
-  passwordHash: string;
+  passwordHash!: string;
 
   @Prop({ type: String, default: null })
   firstName?: string | null;
@@ -28,32 +28,32 @@ export class User {
 
   @Prop({
     type: String,
-    enum: ['superadmin', 'admin', 'case_manager', 'end_user'],
+    enum: ['superadmin', 'admin', 'case_manager', 'lawyer', 'end_user'],
     default: 'end_user',
   })
-  role: string;
+  role!: string;
 
   @Prop({
     type: String,
     enum: ['user1', 'user2'],
     default: 'user1',
   })
-  endUserType: string | null;
+  endUserType!: string | null;
 
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  invitedUser: Types.ObjectId | null;
+  invitedUser!: Types.ObjectId | null;
 
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
-  invitedBy: Types.ObjectId | null;
+  invitedBy!: Types.ObjectId | null;
 
   @Prop({ type: Types.ObjectId, ref: 'Case', default: null })
-  inviteCaseId: Types.ObjectId | null;
+  inviteCaseId!: Types.ObjectId | null;
 
   @Prop({ type: String, default: null })
-  resetPasswordToken: string | null;
+  resetPasswordToken!: string | null;
 
   @Prop({ type: Date, default: null })
-  resetPasswordExpires: Date | null;
+  resetPasswordExpires!: Date | null;
 
   @Prop({ type: String, default: null })
   phone?: string | null;
@@ -62,7 +62,7 @@ export class User {
   marketingConsent?: boolean;
 
   @Prop({ type: Boolean, required: true })
-  acceptedTerms: boolean;
+  acceptedTerms!: boolean;
 
   @Prop({ type: Boolean, default: false })
   emailVerified?: boolean;

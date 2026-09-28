@@ -208,57 +208,44 @@ export const PreQuestionnaireSchema =
 
 @Schema({ _id: false })
 export class Approval {
-  @Prop({ default: false })
-  user1Approved?: boolean;
+  @Prop({ type: Boolean, default: false })
+  user1Approved!: boolean;
 
-  @Prop({
-    type: Date,
-    default: null,
-  })
-  user1ApprovedAt?: Date | null;
+  @Prop({ type: Date, default: null })
+  user1ApprovedAt!: Date | null;
 
-  @Prop({ default: false })
-  user2Approved?: boolean;
+  @Prop({ type: Boolean, default: false })
+  user2Approved!: boolean;
 
-  @Prop({
-    type: Date,
-    default: null,
-  })
-  user2ApprovedAt?: Date | null;
+  @Prop({ type: Date, default: null })
+  user2ApprovedAt!: Date | null;
 
-  @Prop({ default: false })
-  lawyerApproved?: boolean;
+  @Prop({ type: Types.ObjectId, default: null })
+  disapprovedBy!: Types.ObjectId | null;
 
-  @Prop({
-    type: Date,
-    default: null,
-  })
-  lawyerApprovedAt?: Date | null;
+  @Prop({ type: Date, default: null })
+  disapprovedAt!: Date | null;
 
-  @Prop({
-    type: Types.ObjectId,
-    ref: 'Lawyer',
-    default: null,
-  })
-  approvedLawyer?: Types.ObjectId | null;
+  @Prop({ type: String, default: null })
+  disapprovalReason!: string | null;
 
-  @Prop({
-    default: false,
-  })
-  caseManagerApproved?: boolean;
+  @Prop({ type: Boolean, default: false })
+  lawyerApproved!: boolean;
 
-  @Prop({
-    type: Date,
-    default: null,
-  })
-  caseManagerApprovedAt?: Date | null;
+  @Prop({ type: Date, default: null })
+  lawyerApprovedAt!: Date | null;
 
-  @Prop({
-    type: Types.ObjectId,
-    ref: 'User',
-    default: null,
-  })
-  approvedBy?: Types.ObjectId | null;
+  @Prop({ type: Types.ObjectId, default: null })
+  approvedLawyer!: Types.ObjectId | null;
+
+  @Prop({ type: Boolean, default: false })
+  caseManagerApproved!: boolean;
+
+  @Prop({ type: Date, default: null })
+  caseManagerApprovedAt!: Date | null;
+
+  @Prop({ type: Types.ObjectId, default: null })
+  approvedBy!: Types.ObjectId | null;
 }
 
 export const ApprovalSchema =
