@@ -388,8 +388,7 @@ export class CasesService {
 
     const isOwner = c.owner?.toString() === actorId.toString();
     const isInvited = c.invitedUser?.toString() === actorId.toString();
-    if (!isOwner && !isInvited)
-      throw new ForbiddenException('Not part of case');
+
 
     if (stepName === 'joint-liabilities-and-debts' && !isPrivileged) {
       const existing = c.status?.jointInformation;
@@ -406,9 +405,6 @@ export class CasesService {
         );
       }
 
-      // Nobody's touched it yet → only the owner may make the first submission.
-      // Otherwise → only whoever the ball is currently with (e.g. the party
-      // who just disapproved) may submit.
       const canSubmit =
         alreadySubmittedBy === null
           ? isOwner
@@ -436,8 +432,6 @@ export class CasesService {
       const approval = this.ensureApprovalObj(c);
       const now = new Date();
 
-      // Whoever just submitted self-approves; the OTHER party's flag resets
-      // to pending, since they now need to review this fresh version.
       if (isOwner) {
         approval.user1Approved = true;
         approval.user1ApprovedAt = now;
