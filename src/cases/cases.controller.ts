@@ -1,5 +1,4 @@
 // src/cases/cases.controller.ts
-
 import {
   Body,
   Controller,
@@ -189,11 +188,7 @@ export class CasesController {
       );
     }
 
-    return this.casesService.invite(
-      id,
-      user.id,
-      dto,
-    );
+    return this.casesService.invite(id, user.id, dto);
   }
 
   // ============================================================
@@ -256,10 +251,7 @@ export class CasesController {
     const user =
       this.ensureUser(req);
 
-    const isPrivileged =
-      this.isPrivilegedRole(
-        user.role,
-      );
+    const isPrivileged = this.isPrivilegedRole(user.role);
 
     return this.casesService.updateQuestionnaireStep(
       id,
@@ -379,14 +371,11 @@ export class CasesController {
       );
 
     if (!c) {
-      throw new NotFoundException(
-        'Case not found',
-      );
+      throw new NotFoundException('Case not found');
     }
 
     return {
-      workflowStatus:
-        c.workflowStatus,
+      workflowStatus: c.workflowStatus,
     };
   }
 
@@ -410,9 +399,7 @@ export class CasesController {
       );
 
     if (!c) {
-      throw new NotFoundException(
-        'Case not found',
-      );
+      throw new NotFoundException('Case not found');
     }
 
     const userIdStr =
@@ -433,9 +420,7 @@ export class CasesController {
       c.invitedUser?.toString() !==
         userIdStr
     ) {
-      throw new ForbiddenException(
-        'Forbidden',
-      );
+      throw new ForbiddenException('Forbidden');
     }
 
     // IMPORTANT:
