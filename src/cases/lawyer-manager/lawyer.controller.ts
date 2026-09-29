@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -12,6 +13,10 @@ import {
   UseInterceptors,
   UnauthorizedException,
 } from '@nestjs/common';
+
+import { Roles } from '../../common/roles.decorator';
+import { RolesGuard } from '../../common/roles.guard';
+
 
 import { FileInterceptor } from '@nestjs/platform-express';
 
@@ -39,6 +44,205 @@ export class LawyerController {
     }
 
     return user;
+  }
+
+  
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Post('manage/seed')
+  async seedLawyers() {
+    return this.lawyerService.seedInitialLawyersIfEmpty();
+  }
+
+  // =====================================================
+  // CREATE LAWYER + USER LOGIN
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @UseInterceptors(
+    FileInterceptor('photo'),
+  )
+  @Post('manage')
+  async createLawyer(
+    @Req() req: any,
+
+    @UploadedFile()
+    file: Express.Multer.File,
+
+    @Body() body: any,
+  ) {
+    const payload: any = {
+      ...body,
+    };
+
+    /**
+     * Uploaded lawyer photo.
+     */
+    if (file) {
+      payload.avatarUrl =
+        `/uploads/lawyers/${file.filename}`;
+    }
+
+    /**
+     * Password is used only for creating
+     * the User login account.
+     *
+     * It must NOT be saved inside Lawyer.
+     */
+    const password =
+      body.password || undefined;
+
+    delete payload.password;
+
+    /**
+     * companyId is used to associate the lawyer
+     * with a Company.
+     *
+     * The service handles creation of:
+     *
+     * 1. Lawyer document
+     * 2. User document
+     * 3. Lawyer -> User relationship
+     */
+    return this.lawyerService.create(
+      body.companyId,
+      payload,
+      password,
+    );
+  }
+
+  // =====================================================
+  // LIST LAWYERS
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Get('manage')
+  async listLawyers() {
+    return this.lawyerService.listAll();
+  }
+
+  // =====================================================
+  // GET ONE LAWYER
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Get('manage/:id')
+  async getLawyer(
+    @Param('id') id: string,
+  ) {
+    return this.lawyerService.findById(id);
+  }
+
+  // =====================================================
+  // CREATE LOGIN FOR EXISTING LAWYER
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Post('manage/:id/create-login')
+  async createLawyerLogin(
+    @Param('id') id: string,
+
+    @Body()
+    body: {
+      email: string;
+      password?: string;
+    },
+  ) {
+    return this.lawyerService.createLoginAccount(
+      id,
+      body.email,
+      body.password,
+    );
+  }
+
+  // =====================================================
+  // UPDATE LAWYER
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Patch('manage/:id')
+  async updateLawyer(
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.lawyerService.update(
+      id,
+      body,
+    );
+  }
+
+  // =====================================================
+  // UPDATE LAWYER STATUS
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Patch('manage/:id/status')
+  async updateLawyerStatus(
+    @Param('id') id: string,
+
+    @Body()
+    body: {
+      status:
+        | 'available'
+        | 'unavailable'
+        | 'archived';
+    },
+  ) {
+    return this.lawyerService.updateStatus(
+      id,
+      body.status,
+    );
+  }
+
+  // =====================================================
+  // DELETE LAWYER
+  // =====================================================
+
+  @Roles(
+    'admin',
+    'superadmin',
+    'case_manager',
+  )
+  @UseGuards(RolesGuard)
+  @Delete('manage/:id')
+  async deleteLawyer(
+    @Param('id') id: string,
+  ) {
+    return this.lawyerService.remove(id);
   }
 
   // =====================================================

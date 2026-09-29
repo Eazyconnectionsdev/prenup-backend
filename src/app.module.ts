@@ -11,6 +11,7 @@ import { CaseManagerModule } from './cases/case-manager/case-manager.module';
 import { AdminModule } from './admin/admin.module';
 import { AgreementModule } from './agreement/agreement.module';
 import { AuditLogModule } from './common/audit-log/audit-log.module';
+import { CompaniesModule } from './cases/companies/companies.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 
 
@@ -26,11 +27,11 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     MailModule,
     AdminModule,
     CaseManagerModule,
+    CompaniesModule,
+    LawyerModule,
+    AuditLogModule
 
-    // AuditLogModule for All Global Files
-    AuditLogModule,
 
-    LawyerModule
   ],
 })
-export class AppModule {}
+export class AppModule { }
