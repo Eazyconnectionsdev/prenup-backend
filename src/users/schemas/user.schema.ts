@@ -75,6 +75,11 @@ export class User {
 
   @Prop({ type: Boolean, default: false })
   paymentDone?: boolean;
+
+  // For role "lawyer": the directory profile (Lawyer) this login belongs to.
+  // Cases reference the profile in assignedLawyerP1/P2.
+  @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null })
+  lawyerProfile?: Types.ObjectId | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -158,6 +158,21 @@ export class CasesService {
       lockedAt: null,
     } as PreQuestionnaire;
   }
+  private hasData(value: unknown): boolean {
+    return !!value && typeof value === 'object' && Object.keys(value).length > 0;
+  }
+
+  // Joint section is awaiting the partner's approval: submitted via its last form
+  // (older cases may have `submitted` set by the first joint form only)
+  private isJointReviewPending(c: CaseDocument): boolean {
+    const status = c.status?.jointInformation;
+    return (
+      !!status?.submitted &&
+      !status.locked &&
+      this.hasData((c as any).jointInformation?.jointLiabilitiesAndDebts)
+    );
+  }
+
   public areAllSectionsSubmitted(c: CaseDocument): boolean {
     return !!(
       c.status?.myInformation?.submitted &&
@@ -390,7 +405,12 @@ export class CasesService {
     const isInvited = c.invitedUser?.toString() === actorId.toString();
 
 
-    if (stepName === 'joint-liabilities-and-debts' && !isPrivileged) {
+    // Joint information is filled in over three forms but reviewed as one section.
+    // The same turn/lock rules apply to all three forms.
+    const isJointStep = config.section === 'jointInformation';
+    const isFinalJointStep = stepName === 'joint-liabilities-and-debts';
+
+    if (isJointStep && !isPrivileged) {
       const existing = c.status?.jointInformation;
       const alreadySubmittedBy = existing?.submittedBy
         ? existing.submittedBy.toString()
@@ -399,7 +419,7 @@ export class CasesService {
       if (existing?.locked) {
         throw new BadRequestException('This section is already locked');
       }
-      if (existing?.submitted) {
+      if (this.isJointReviewPending(c)) {
         throw new BadRequestException(
           'This section is pending review by the other party',
         );
@@ -419,16 +439,30 @@ export class CasesService {
       }
     }
 
+    // The joint section only goes for review once all three joint forms are filled in
+    if (isFinalJointStep) {
+      const joint = (c as any).jointInformation || {};
+      if (!this.hasData(joint.jointAssets) || !this.hasData(joint.jointIncomeAndRevenue)) {
+        throw new BadRequestException(
+          'Please complete Joint Assets and Joint Income before submitting for approval',
+        );
+      }
+    }
+
     const { section, field } = config;
     (c as any)[section] = (c as any)[section] || {};
     (c as any)[section][field] = data;
+    c.markModified(section);
 
-    const status = this.ensureSectionStatus(c, section);
-    status.submitted = true;
-    status.submittedBy = new Types.ObjectId(actorId);
-    status.submittedAt = new Date();
+    // Earlier joint forms are only saved; the last one submits the whole section
+    if (!isJointStep || isFinalJointStep) {
+      const status = this.ensureSectionStatus(c, section);
+      status.submitted = true;
+      status.submittedBy = new Types.ObjectId(actorId);
+      status.submittedAt = new Date();
+    }
 
-    if (stepName === 'joint-liabilities-and-debts') {
+    if (isFinalJointStep) {
       const approval = this.ensureApprovalObj(c);
       const now = new Date();
 
@@ -487,7 +521,7 @@ export class CasesService {
   if (!isOwner && !isInvited) throw new ForbiddenException('Not part of case');
 
   const jointStatus = c.status?.jointInformation;
-  if (!jointStatus?.submitted) {
+  if (!jointStatus || !this.isJointReviewPending(c)) {
     throw new BadRequestException('Nothing pending review for this section');
   }
   if (jointStatus.locked) {
@@ -531,7 +565,7 @@ async rejectCaseByUser(
   if (!isOwner && !isInvited) throw new ForbiddenException('Not part of case');
 
   const jointStatus = c.status?.jointInformation;
-  if (!jointStatus?.submitted) {
+  if (!jointStatus || !this.isJointReviewPending(c)) {
     throw new BadRequestException('Nothing pending review for this section');
   }
   if (jointStatus.submittedBy?.toString() === actorId.toString()) {

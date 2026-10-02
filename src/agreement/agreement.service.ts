@@ -101,7 +101,17 @@ export class AgreementService {
     actorId: string,
   ): Promise<VersionResult> {
 
-    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId, ['OWNER']);
+    // Called by whichever partner gives the final approval, so both may generate
+    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId, [
+      'OWNER',
+      'INVITED_USER',
+    ]);
+
+    if (!c.status?.jointInformation?.locked) {
+      throw new BadRequestException(
+        'Both partners must approve the joint information before the agreement is generated',
+      );
+    }
 
     const buffer = await buildAgreementDocxBuffer({
       caseId: c._id.toString(),
@@ -276,6 +286,30 @@ export class AgreementService {
       minorVersion: versionDoc.minorVersion,
       versionId: versionDoc._id,
     };
+  }
+
+  // Whether the lawyer stage is initialized, and if not, whether it can be
+  // (it copies the latest CM-approved version)
+  async getLawyerStageReadiness(
+    caseId: string,
+  ): Promise<{ initialized: boolean; canInitialize: boolean }> {
+    const id = new Types.ObjectId(caseId);
+    const [baseline, cmVersion] = await Promise.all([
+      this.documentVersion.exists({ caseId: id, majorVersion: AgreementStage.LAWYER }),
+      this.documentVersion.exists({ caseId: id, majorVersion: AgreementStage.CM }),
+    ]);
+    return { initialized: !!baseline, canInitialize: !!baseline || !!cmVersion };
+  }
+
+  // Used when the CM assigns lawyers; does nothing if already initialized
+  async ensureLawyerStageInitialized(
+    caseId: string,
+    actorId: string,
+  ): Promise<{ initialized: boolean; created: boolean }> {
+    const { initialized } = await this.getLawyerStageReadiness(caseId);
+    if (initialized) return { initialized: true, created: false };
+    await this.initializeLawyerStage(caseId, actorId);
+    return { initialized: true, created: true };
   }
 
   async initializeLawyerStage(
@@ -870,10 +904,11 @@ private async validateCaseAndActor(
     case 'lawyer': {
       const p1LawyerId = (c as any).assignedLawyerP1?.toString();
       const p2LawyerId = (c as any).assignedLawyerP2?.toString();
+      const myIds = [actorIdStr, actorUser.lawyerProfile?.toString()].filter(Boolean);
 
-      if (p1LawyerId === actorIdStr) {
+      if (p1LawyerId && myIds.includes(p1LawyerId)) {
         matchedRole = 'LAWYER_P1';
-      } else if (p2LawyerId === actorIdStr) {
+      } else if (p2LawyerId && myIds.includes(p2LawyerId)) {
         matchedRole = 'LAWYER_P2';
       }
       break;
