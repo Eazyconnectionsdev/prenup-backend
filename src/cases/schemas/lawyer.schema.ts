@@ -1,62 +1,162 @@
-
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+
 import { Company } from './company.schema';
 
 export type LawyerDocument = Lawyer & Document;
 
 @Schema({ timestamps: true })
 export class Lawyer {
-  @Prop({ required: true })
-  externalId: string;
+  /**
+   * External/reference ID used by your lawyer directory.
+   */
+  @Prop({
+    required: true,
+    unique: true,
+    index: true,
+    trim: true,
+  })
+  externalId!: string;
 
-  @Prop({ required: true })
-  name: string;
+  /**
+   * Lawyer display name.
+   */
+  @Prop({
+    required: true,
+    trim: true,
+  })
+  name!: string;
 
+  /**
+   * Price displayed to clients.
+   */
   @Prop()
-  priceText: string;
+  priceText?: string;
 
+  /**
+   * Lawyer profile/avatar.
+   */
   @Prop()
   avatarUrl?: string;
 
-  @Prop({ type: String, default: 'available' })
-  status?: 'available' | 'unavailable' | 'archived';
+  /**
+   * Lawyer availability.
+   */
+  @Prop({
+    type: String,
+    enum: [
+      'available',
+      'unavailable',
+      'archived',
+    ],
+    default: 'available',
+  })
+  status?:
+    | 'available'
+    | 'unavailable'
+    | 'archived';
 
-  // New: reference to Company
-  @Prop({ type: Types.ObjectId, ref: 'Company', required: true })
-  company?: Types.ObjectId | Company;
+  /**
+   * Company that owns/manages this lawyer.
+   */
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'Company',
+    required: true,
+    index: true,
+  })
+  company!: Types.ObjectId | Company;
 
-  // Additional contact fields
-  @Prop()
+  /**
+   * =========================================================
+   * LOGIN USER CONNECTION
+   * =========================================================
+   *
+   * Links this Lawyer profile to the User account.
+   *
+   * User:
+   *   _id = 123
+   *   role = "lawyer"
+   *
+   * Lawyer:
+   *   user = 123
+   */
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
+    unique: true,
+    sparse: true,
+    index: true,
+  })
+  user?: Types.ObjectId;
+
+  /**
+   * Public contact information.
+   */
+  @Prop({
+    trim: true,
+  })
   publicEmail?: string;
 
-  @Prop()
+  @Prop({
+    trim: true,
+  })
   publicPhone?: string;
 
-  @Prop()
+  /**
+   * Direct/private contact information.
+   */
+  @Prop({
+    trim: true,
+  })
   directEmail?: string;
 
-  @Prop()
+  @Prop({
+    trim: true,
+  })
   directPhone?: string;
 
-  @Prop()
+  /**
+   * Lawyer website.
+   */
+  @Prop({
+    trim: true,
+  })
   website?: string;
 
-  @Prop()
+  /**
+   * Lawyer profile link.
+   */
+  @Prop({
+    trim: true,
+  })
   profileLink?: string;
 
-  @Prop()
+  /**
+   * Lawyer address.
+   */
+  @Prop({
+    trim: true,
+  })
   address?: string;
 
-  @Prop()
+  /**
+   * Bar/license number.
+   */
+  @Prop({
+    trim: true,
+  })
   barNumber?: string;
 
   @Prop()
   notes?: string;
 
-  // Login account (User with role "lawyer") for this profile
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   userId?: Types.ObjectId | null;
+
+  @Prop()
+  createdBy?: string;
 }
 
-export const LawyerSchema = SchemaFactory.createForClass(Lawyer);
+export const LawyerSchema =
+  SchemaFactory.createForClass(Lawyer);

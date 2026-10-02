@@ -2,7 +2,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Company, CompanyDocument } from './schemas/company.schema';
+import { Company, CompanyDocument } from '../schemas/company.schema';
 
 @Injectable()
 export class CompaniesService {
@@ -24,7 +24,7 @@ export class CompaniesService {
 
   async seedInitialCompaniesIfEmpty() {
     const count = await this.companyModel.countDocuments().exec();
-    if (count > 0) return { seeded: false };
+  if (count > 0) return { seeded: false };
 
     const companies = [
       { name: 'SALESQL LTD', companyNumber: '12345678', photoUrl: 'https://i.pravatar.cc/200?img=47' },
