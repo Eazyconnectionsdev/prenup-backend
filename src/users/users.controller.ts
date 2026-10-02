@@ -25,8 +25,9 @@ export class UsersController {
     @Req() req,
     @Body() updateUserDto: UpdateUserProfileDto,
   ) {
+    // JwtStrategy.validate() exposes the user id as `id` (not `userId`)
     return this.usersService.updateProfile(
-      req.user.userId,
+      req.user.id,
       updateUserDto,
     );
   }

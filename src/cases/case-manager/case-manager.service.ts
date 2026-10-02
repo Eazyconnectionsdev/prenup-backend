@@ -46,10 +46,13 @@ import {
 } from '../../cases/schemas/case_changesets.schema';
 
 import { MailService } from '../../mail/mail.service';
+import { AgreementService } from '../../agreement/agreement.service';
 @Injectable()
 export class CaseManagerService {
   constructor(
     private readonly mailService: MailService,
+
+    private readonly agreementService: AgreementService,
 
     @InjectModel(CaseManagerNote.name)
     private readonly noteModel: Model<CaseManagerNote>,
@@ -688,6 +691,17 @@ export class CaseManagerService {
       );
     }
 
+    // Assigned lawyers work on the lawyer-stage document, which is created
+    // from the CM-approved version — refuse before assigning if it can't be
+    const readiness =
+      await this.agreementService.getLawyerStageReadiness(caseId);
+
+    if (!readiness.canInitialize) {
+      throw new BadRequestException(
+        'Approve the case and generate the CM agreement before assigning lawyers',
+      );
+    }
+
     caseDoc.assignedLawyerP1 =
       new Types.ObjectId(dto.p1LawyerId);
 
@@ -704,6 +718,12 @@ export class CaseManagerService {
       new Types.ObjectId(userId);
 
     await caseDoc.save();
+
+    // Create the lawyer-stage baseline (no-op when re-assigning lawyers)
+    await this.agreementService.ensureLawyerStageInitialized(
+      caseId,
+      userId,
+    );
 
     await this.createTimelineEntry(
       caseId,
