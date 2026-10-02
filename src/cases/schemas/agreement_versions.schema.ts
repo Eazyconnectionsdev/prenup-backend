@@ -69,3 +69,8 @@ export const AgreementVersionSchema =
   SchemaFactory.createForClass(
     AgreementVersion,
   );
+
+// Registered under its own model name: the agreement module's (different)
+// AgreementVersion schema owns the "AgreementVersion" name, and @nestjs/mongoose
+// reuses whichever schema registers a name first.
+export const LEGACY_AGREEMENT_VERSION_MODEL = 'LegacyAgreementVersion';

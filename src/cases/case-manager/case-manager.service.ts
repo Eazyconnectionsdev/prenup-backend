@@ -39,6 +39,7 @@ import {
 
 import {
   AgreementVersion,
+  LEGACY_AGREEMENT_VERSION_MODEL,
 } from '../../cases/schemas/agreement_versions.schema';
 
 import {
@@ -69,7 +70,7 @@ export class CaseManagerService {
     @InjectModel(CaseAuditLog.name)
     private readonly auditLogModel: Model<CaseAuditLog>,
 
-    @InjectModel(AgreementVersion.name)
+    @InjectModel(LEGACY_AGREEMENT_VERSION_MODEL)
     private readonly agreementVersionModel: Model<AgreementVersion>,
 
     @InjectModel(CaseChangeSet.name)

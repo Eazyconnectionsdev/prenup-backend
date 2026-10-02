@@ -41,6 +41,7 @@ import {
 import {
   AgreementVersion,
   AgreementVersionSchema,
+  LEGACY_AGREEMENT_VERSION_MODEL,
 } from '../../cases/schemas/agreement_versions.schema';
 
 import {
@@ -93,7 +94,7 @@ import { CaseManagerService } from './case-manager.service';
       },
 
       {
-        name: AgreementVersion.name,
+        name: LEGACY_AGREEMENT_VERSION_MODEL,
         schema: AgreementVersionSchema,
       },
 
