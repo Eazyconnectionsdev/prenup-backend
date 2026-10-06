@@ -22,6 +22,11 @@ import {
 } from './schemas/case_backup.schema';
 
 import {
+  Counter,
+  CounterSchema,
+} from '../common/schemas/counter.schema';
+
+import {
   User,
   UserSchema,
 } from '../users/schemas/user.schema';
@@ -61,6 +66,11 @@ import { LawyerModule } from './lawyer-manager/lawyer.module';
       {
         name: User.name,
         schema: UserSchema,
+      },
+
+      {
+        name: Counter.name,
+        schema: CounterSchema,
       },
     ]),
 

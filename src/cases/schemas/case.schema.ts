@@ -371,6 +371,19 @@ export class Case {
   })
   title!: string;
 
+  /**
+   * Human-readable case identifier shown on the frontend.
+   * Format: CASE-YYYY-NNNNN (e.g. CASE-2026-00001).
+   * Generated once on creation; all internal lookups still use _id.
+   */
+  @Prop({
+    type: String,
+    unique: true,
+    sparse: true,
+    default: null,
+  })
+  caseNumber?: string | null;
+
   @Prop({
     default: false,
   })
@@ -885,3 +898,7 @@ export const CaseSchema =
   SchemaFactory.createForClass(
     Case,
   );
+
+// Sparse unique index so existing documents with caseNumber: null are not
+// forced to conflict while still preventing duplicate caseNumbers.
+CaseSchema.index({ caseNumber: 1 }, { unique: true, sparse: true });

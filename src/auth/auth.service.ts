@@ -347,7 +347,7 @@ export class AuthService {
       await this.mailService.sendInviteCredentials(
         email,
         password,
-        caseDoc._id.toString(),
+        caseDoc.caseNumber ?? caseDoc._id.toString(),
       );
     } catch (err) {
       this.logger?.error?.(
