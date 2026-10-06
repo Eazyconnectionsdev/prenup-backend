@@ -27,6 +27,8 @@ import { CasesService } from '../cases/cases.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
 
+import { AcceptInviteDto } from './dto/accept-invite.dto';
+import { PartnerInviteService } from '../cases/partner-invite.service';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
@@ -40,6 +42,7 @@ export class AuthController {
     private authService: AuthService,
     private casesService: CasesService,
     private usersService: UsersService,
+    private partnerInviteService: PartnerInviteService,
   ) { }
 
   @Post('register')
@@ -189,16 +192,26 @@ export class AuthController {
   }
  
 
-  @Post('accept-invite')
-  async acceptInvite(
-    @Body('token') token: string,
-    @Body('caseId') caseId: string,
-    @Body('password') password: string,
+  @Get('invite-info')
+  async inviteInfo(
+    @Query('caseId') caseId: string,
+    @Query('token') token: string,
   ) {
+    return this.partnerInviteService.openByToken(caseId, token);
+  }
+
+  @Post('accept-invite')
+  async acceptInvite(@Body() dto: AcceptInviteDto) {
     return this.authService.acceptInvite(
-      caseId,
-      token,
-      password,
+      dto.caseId,
+      dto.token,
+      dto.password,
+      {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        phone: dto.phone,
+      },
     );
   }
 

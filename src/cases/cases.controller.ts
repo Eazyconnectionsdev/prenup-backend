@@ -19,6 +19,7 @@ import { CasesService } from './cases.service';
 import { CreateCaseDto } from './dto/create-case.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
+import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
 
 // IMPORTANT:
 // Use the NEW unified LawyerService.
@@ -189,6 +190,59 @@ export class CasesController {
     }
 
     return this.casesService.invite(id, user.id, dto);
+  }
+
+  // ============================================================
+  // ONBOARDING (user 1 / case owner only)
+  // GET  /cases/:id/onboarding
+  // POST /cases/:id/onboarding
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/onboarding')
+  async getOnboarding(@Req() req: any, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    return this.casesService.getOnboarding(id, (user.id ?? user._id).toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/onboarding')
+  async completeOnboarding(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: CompleteOnboardingDto,
+  ) {
+    const user = this.ensureUser(req);
+    return this.casesService.completeOnboarding(
+      id,
+      (user.id ?? user._id).toString(),
+      dto,
+    );
+  }
+
+  // ============================================================
+  // GET INVITE STATUS (what was typed + who actually registered)
+  // GET /cases/:id/invite
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/invite')
+  async getInvite(@Req() req: any, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+
+    const c = await this.casesService.findById(id);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+
+    const userIdStr = (user.id ?? user._id)?.toString();
+    if (
+      !(this.isPrivilegedRole(user.role) || c.owner?.toString() === userIdStr)
+    ) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.getInvite(id);
   }
 
   // ============================================================

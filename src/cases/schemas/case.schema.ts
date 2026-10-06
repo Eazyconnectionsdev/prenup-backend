@@ -40,6 +40,37 @@ export const PartnerInviteDetailsSchema =
 
 
 
+// Service type chosen by user 1 during onboarding.
+// 'help-choose' means the user is still undecided.
+export const AGREEMENT_TYPES = [
+  'prenup-marriage',
+  'prenup-civil',
+  'postnup-marriage',
+  'postnup-civil',
+  'cohabitation',
+  'help-choose',
+] as const;
+
+@Schema({ _id: false })
+export class OnboardingInfo {
+  @Prop({ type: Boolean, default: false })
+  completed!: boolean;
+
+  @Prop({ type: Date, default: null })
+  completedAt?: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  completedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Boolean, default: false })
+  residesInUK!: boolean;
+
+  @Prop({ type: Boolean, default: false })
+  understandsService!: boolean;
+}
+
+export const OnboardingInfoSchema = SchemaFactory.createForClass(OnboardingInfo);
+
 export enum CaseWorkflowStatus {
   NOT_PAID = 'NOT_PAID',
 
@@ -375,6 +406,20 @@ export class Case {
     default: false,
   })
   paymentCompleted?: boolean;
+
+  // Chosen during onboarding (user 1 only).
+  @Prop({
+    type: String,
+    enum: AGREEMENT_TYPES,
+    default: null,
+  })
+  agreementType?: string | null;
+
+  @Prop({
+    type: OnboardingInfoSchema,
+    default: {},
+  })
+  onboarding?: OnboardingInfo;
 
   @Prop({
     type: Object,

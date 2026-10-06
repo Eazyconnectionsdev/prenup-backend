@@ -22,11 +22,12 @@ import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { CaseBackup, CaseBackupDocument } from './schemas/case_backup.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
+import { PartnerInviteService } from './partner-invite.service';
 
 @Injectable()
 export class CasesService {
   private DUMMY_AGREEMENT_DRIVE_LINK = 'https://drive.google.com/file/d/FAKE_GOOGLE_DRIVE_ID/view';
-  constructor(@InjectModel(Case.name) private caseModel: Model<CaseDocument>, @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>, private config: ConfigService, private mailService: MailService, @InjectModel(CaseBackup.name,) private questionnaireBackupModel: Model<CaseBackupDocument>) { }
+  constructor(@InjectModel(Case.name) private caseModel: Model<CaseDocument>, @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>, private config: ConfigService, private mailService: MailService, @InjectModel(CaseBackup.name,) private questionnaireBackupModel: Model<CaseBackupDocument>, private partnerInvites: PartnerInviteService) { }
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
@@ -247,12 +248,69 @@ export class CasesService {
     return c.save();
   }
 
+  // Onboarding belongs to the case owner (user 1) only; the invited partner
+  // (user 2) never goes through it.
+  async getOnboarding(caseId: string, userId: string) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId).lean().exec();
+    if (!c) throw new NotFoundException('Case not found');
+    if (c.owner?.toString() !== userId.toString()) {
+      throw new ForbiddenException('Forbidden');
+    }
+    return {
+      completed: !!c.onboarding?.completed,
+      agreementType: c.agreementType ?? null,
+      completedAt: c.onboarding?.completedAt ?? null,
+    };
+  }
+
+  async completeOnboarding(
+    caseId: string,
+    userId: string,
+    dto: { agreementType: string; residesInUK: boolean; understandsService: boolean },
+  ) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+    if (c.owner?.toString() !== userId.toString()) {
+      throw new ForbiddenException('Only the case owner can complete onboarding');
+    }
+
+    const prev = c.onboarding;
+    c.agreementType = dto.agreementType;
+    c.onboarding = {
+      completed: true,
+      completedAt: prev?.completedAt ?? new Date(),
+      completedBy: prev?.completedBy ?? new Types.ObjectId(userId),
+      residesInUK: dto.residesInUK,
+      understandsService: dto.understandsService,
+    } as any;
+    await c.save();
+
+    return {
+      completed: true,
+      agreementType: c.agreementType,
+      completedAt: c.onboarding?.completedAt,
+    };
+  }
+
+  getInvite(caseId: string) {
+    return this.partnerInvites.getForCase(caseId);
+  }
+
   async invite(caseId: string, inviterId: string, dto: InvitePartnerDto) {
     const c = await this.caseModel.findById(caseId);
 
     if (!c) {
       throw new NotFoundException('Case not found');
     }
+
+    // A partner who already joined can't be re-invited.
+    await this.partnerInvites.assertCanInvite(caseId);
 
     const token = crypto.randomBytes(32).toString('hex');
 
@@ -282,6 +340,9 @@ export class CasesService {
     };
 
     await c.save();
+
+    // Track the invite (status, opens, resends, who registered).
+    await this.partnerInvites.recordSent(caseId, inviterId, dto, token, expires);
 
     const params = new URLSearchParams({
       token,

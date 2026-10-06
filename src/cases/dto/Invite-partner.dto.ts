@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
+import { IsValidPhone } from '../../common/is-valid-phone.decorator';
 
 export class InvitePartnerDto {
   @IsString()
@@ -16,6 +17,7 @@ export class InvitePartnerDto {
 
   @IsOptional()
   @IsString()
+  @IsValidPhone()
   mobileNumber?: string;
 
   @IsOptional()
