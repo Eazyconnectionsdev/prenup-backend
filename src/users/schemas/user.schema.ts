@@ -1,5 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import {
+  GeoLocationSchema,
+  GeoLocationMongoSchema,
+} from '../../common/schemas/geo-location.schema';
 
 export type UserDocument = User & Document;
 
@@ -75,6 +79,24 @@ export class User {
 
   @Prop({ type: Boolean, default: false })
   paymentDone?: boolean;
+
+  // ── Location tracking ──────────────────────────────────────────────────────
+
+  /** Raw IP captured at registration time */
+  @Prop({ type: String, default: null })
+  registrationIp?: string | null;
+
+  /** Raw IP captured at the most-recent login / OTP-verify */
+  @Prop({ type: String, default: null })
+  lastLoginIp?: string | null;
+
+  /** Resolved geo data captured at registration */
+  @Prop({ type: GeoLocationMongoSchema, default: null })
+  registrationLocation?: GeoLocationSchema | null;
+
+  /** Resolved geo data captured at the most-recent login / OTP-verify */
+  @Prop({ type: GeoLocationMongoSchema, default: null })
+  lastLocation?: GeoLocationSchema | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

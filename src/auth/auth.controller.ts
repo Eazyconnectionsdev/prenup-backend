@@ -30,6 +30,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
+import { LocationService } from '../common/location.service';
 
 // import cookie helpers from same folder (adjust path if you put cookie.utils elsewhere)
 import { DEFAULT_COOKIE_OPTIONS, cookieOptionsWithMaxAge } from './cookie.utils';
@@ -40,12 +41,13 @@ export class AuthController {
     private authService: AuthService,
     private casesService: CasesService,
     private usersService: UsersService,
+    private locationService: LocationService,
   ) { }
 
   @Post('register')
   @HttpCode(201)
-  async register(@Body() dto: RegisterDto) {
-    const result = await this.authService.registerAndSendOtp(dto);
+  async register(@Body() dto: RegisterDto, @Req() req: Request) {
+    const result = await this.authService.registerAndSendOtp(dto, req.ip);
     return {
       message: 'Registration successful. An OTP has been sent to your email for verification.',
       email: result.email,
@@ -56,7 +58,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
 
     const user = await this.authService.validateUser(dto.email, dto.password);
     if (!user) {
@@ -66,6 +68,13 @@ export class AuthController {
     if (!user.emailVerified) {
       throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
+
+    // Capture login location (fire-and-forget)
+    void this.locationService.capture(
+      (user._id as any)?.toString?.() ?? String(user._id),
+      req.ip,
+      'login',
+    );
 
     const userCase = await this.casesService.findByCaseId(user.inviteCaseId);
 
@@ -133,8 +142,8 @@ export class AuthController {
 
   @Post('verify-otp')
   @HttpCode(200)
-  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
-    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp, req.ip);
 
     const token = signed.token;
     const expiresAt = signed.expiresAt;
@@ -194,11 +203,13 @@ export class AuthController {
     @Body('token') token: string,
     @Body('caseId') caseId: string,
     @Body('password') password: string,
+    @Req() req: Request,
   ) {
     return this.authService.acceptInvite(
       caseId,
       token,
       password,
+      req.ip,
     );
   }
 
