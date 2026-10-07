@@ -41,19 +41,22 @@ import {
 import {
   AgreementVersion,
   AgreementVersionSchema,
+  LEGACY_AGREEMENT_VERSION_MODEL,
 } from '../../cases/schemas/agreement_versions.schema';
 
 import {
   CaseChangeSet,
   CaseChangeSetSchema,
 } from '../../cases/schemas/case_changesets.schema';
-import { MailModule } from '../../mail/mail.module'; 
+import { MailModule } from '../../mail/mail.module';
+import { AgreementModule } from '../../agreement/agreement.module';
 import { CaseManagerController } from './case-manager.controller';
 import { CaseManagerService } from './case-manager.service';
 
 @Module({
   imports: [
     MailModule,
+    AgreementModule,
     MongooseModule.forFeature([
       
       {
@@ -91,7 +94,7 @@ import { CaseManagerService } from './case-manager.service';
       },
 
       {
-        name: AgreementVersion.name,
+        name: LEGACY_AGREEMENT_VERSION_MODEL,
         schema: AgreementVersionSchema,
       },
 

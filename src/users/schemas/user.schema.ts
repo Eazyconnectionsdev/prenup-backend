@@ -97,6 +97,10 @@ export class User {
   /** Resolved geo data captured at the most-recent login / OTP-verify */
   @Prop({ type: GeoLocationMongoSchema, default: null })
   lastLocation?: GeoLocationSchema | null;
+  // For role "lawyer": the directory profile (Lawyer) this login belongs to.
+  // Cases reference the profile in assignedLawyerP1/P2.
+  @Prop({ type: Types.ObjectId, ref: 'Lawyer', default: null })
+  lawyerProfile?: Types.ObjectId | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

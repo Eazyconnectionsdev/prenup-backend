@@ -54,6 +54,10 @@ export class Lawyer {
 
   @Prop({ default: false })
   verified?: boolean;
+
+  // Login account (User with role "lawyer") for this profile
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  userId?: Types.ObjectId | null;
 }
 
 export const LawyerSchema = SchemaFactory.createForClass(Lawyer);

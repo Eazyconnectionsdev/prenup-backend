@@ -193,11 +193,16 @@ async updateProfile(
   userId: string,
   updateData: UpdateUserProfileDto,
 ) {
+  if (!Types.ObjectId.isValid(userId))
+    throw new BadRequestException('Invalid user id');
+
   const user = await this.userModel.findByIdAndUpdate(
     userId,
     { $set: updateData },
-    { new: true },
-  ).select('-passwordHash');
+    { new: true, runValidators: true },
+  ).select(
+    '-passwordHash -emailVerificationOtp -emailVerificationOtpExpires -resetPasswordToken -resetPasswordExpires',
+  );
 
   if (!user) {
     throw new NotFoundException('User not found');

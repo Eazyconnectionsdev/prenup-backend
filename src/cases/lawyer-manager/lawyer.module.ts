@@ -49,6 +49,7 @@ import {
 import {
   AgreementVersion,
   AgreementVersionSchema,
+  LEGACY_AGREEMENT_VERSION_MODEL,
 } from '../schemas/agreement_versions.schema';
 
 import {
@@ -99,7 +100,7 @@ import { LawyerController } from './lawyer.controller';
         schema: CaseAuditLogSchema,
       },
       {
-        name: AgreementVersion.name,
+        name: LEGACY_AGREEMENT_VERSION_MODEL,
         schema: AgreementVersionSchema,
       },
       {

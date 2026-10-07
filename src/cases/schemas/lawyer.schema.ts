@@ -148,15 +148,12 @@ export class Lawyer {
   })
   barNumber?: string;
 
-  /**
-   * Internal/admin notes.
-   */
   @Prop()
   notes?: string;
 
-  /**
-   * Audit field.
-   */
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  userId?: Types.ObjectId | null;
+
   @Prop()
   createdBy?: string;
 }
