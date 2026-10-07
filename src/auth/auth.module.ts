@@ -10,6 +10,7 @@ import { CasesModule } from '../cases/cases.module';
 import { JwtStrategy } from '../common/jwt.strategy';
 import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from 'src/users/schemas/user.schema';
+import { LocationService } from '../common/location.service';
 
 @Module({
   imports: [
@@ -26,10 +27,11 @@ import { User, UserSchema } from 'src/users/schemas/user.schema';
         signOptions: { expiresIn: cs.get('JWT_EXPIRES_IN') || '7d' },
       }),
     }),
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }])
+    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
   ],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, LocationService],
   controllers: [AuthController],
   exports: [AuthService],
 })
 export class AuthModule {}
+

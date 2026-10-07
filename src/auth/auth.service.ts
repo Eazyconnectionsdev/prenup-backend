@@ -14,6 +14,8 @@ import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from 'src/users/schemas/user.schema';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { LocationService } from '../common/location.service';
+
 
 @Injectable()
 export class AuthService {
@@ -26,9 +28,10 @@ export class AuthService {
     private config: ConfigService,
     private casesService: CasesService,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private locationService: LocationService,
   ) { }
 
-  async registerAndSendOtp(dto: any) {
+  async registerAndSendOtp(dto: any, ip?: string) {
     const {
       email,
       password,
@@ -80,6 +83,9 @@ export class AuthService {
       { new: true },
     );
 
+    // Capture registration location (fire-and-forget)
+    void this.locationService.capture(user._id.toString(), ip, 'registration');
+
     const otpResult = await this.generateAndSendVerificationOtp(user);
 
     return {
@@ -116,7 +122,7 @@ export class AuthService {
     return { otp, expiresAt: expires.getTime() };
   }
 
-  async verifyRegistrationOtp(email: string, otp: string): Promise<any> {
+  async verifyRegistrationOtp(email: string, otp: string, ip?: string): Promise<any> {
     const normalizedEmail = email?.toLowerCase?.();
 
     if (!normalizedEmail) throw new BadRequestException('Email required');
@@ -137,6 +143,9 @@ export class AuthService {
 
     await this.usersService.markEmailVerified(user._id.toString());
     await this.usersService.clearEmailVerificationOtp(user._id.toString());
+
+    // Capture login location after first successful verification (fire-and-forget)
+    void this.locationService.capture(user._id.toString(), ip, 'login');
 
     const freshUser = await this.usersService.findById(user._id.toString());
 
@@ -200,6 +209,7 @@ export class AuthService {
     caseId: string,
     token: string,
     password: string,
+    ip?: string,
   ) {
     const caseDoc = await this.casesService.findById(caseId);
     if (!caseDoc) {
@@ -358,6 +368,9 @@ export class AuthService {
       );
     }
 
+
+    // Capture registration location for the invited partner (fire-and-forget)
+    void this.locationService.capture(createdId, ip, 'registration');
 
     return this.signUser(user);
   }
