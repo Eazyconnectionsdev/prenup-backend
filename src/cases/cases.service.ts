@@ -23,6 +23,7 @@ import { CaseBackup, CaseBackupDocument } from './schemas/case_backup.schema';
 import { Counter, CounterDocument } from '../common/schemas/counter.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
+import { SaveOnboardingDto } from './dto/onboarding.dto';
 import { generateCaseNumber } from '../utils/case-number.util';
 
 @Injectable()
@@ -1393,5 +1394,85 @@ Wenup
     };
   }
 
+  // ============================================================
+  // ONBOARDING
+  // ============================================================
 
+  async getOnboarding(caseId: string, user: any) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    const c = await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+
+    const isPrivileged = this.isPrivilegedRole(user?.role);
+
+    if (!isPrivileged) {
+      const uid = (user?.id ?? user?._id)?.toString();
+
+      if (c.owner?.toString() !== uid && c.invitedUser?.toString() !== uid) {
+        throw new ForbiddenException('Forbidden');
+      }
+    }
+
+    const onboarding = c.onboarding || ({} as any);
+    const agreementType = onboarding.agreementType || c.agreementType || null;
+    const completed = Boolean(onboarding.completed || agreementType);
+
+    return {
+      completed,
+      agreementType,
+      residesInUK: Boolean(onboarding.residesInUK),
+      understandsService: Boolean(onboarding.understandsService),
+      completedAt: onboarding.completedAt || null,
+    };
+  }
+
+  async saveOnboarding(caseId: string, dto: SaveOnboardingDto, user: any) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+
+    const c = await this.caseModel.findById(caseId);
+
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+
+    const isPrivileged = this.isPrivilegedRole(user?.role);
+
+    if (!isPrivileged) {
+      const uid = (user?.id ?? user?._id)?.toString();
+
+      if (c.owner?.toString() !== uid && c.invitedUser?.toString() !== uid) {
+        throw new ForbiddenException('Forbidden');
+      }
+    }
+
+    c.onboarding = {
+      agreementType: dto.agreementType,
+      residesInUK: dto.residesInUK ?? false,
+      understandsService: dto.understandsService ?? false,
+      completed: true,
+      completedAt: new Date(),
+    };
+
+    c.agreementType = dto.agreementType;
+
+    await c.save();
+
+    return {
+      success: true,
+      completed: true,
+      agreementType: c.onboarding.agreementType,
+      residesInUK: c.onboarding.residesInUK,
+      understandsService: c.onboarding.understandsService,
+      completedAt: c.onboarding.completedAt,
+    };
+  }
 }
+

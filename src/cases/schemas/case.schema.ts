@@ -38,6 +38,27 @@ export class PartnerInviteDetails {
 export const PartnerInviteDetailsSchema =
   SchemaFactory.createForClass(PartnerInviteDetails);
 
+@Schema({ _id: false })
+export class CaseOnboarding {
+  @Prop({ type: String, default: null })
+  agreementType?: string | null;
+
+  @Prop({ type: Boolean, default: false })
+  residesInUK?: boolean;
+
+  @Prop({ type: Boolean, default: false })
+  understandsService?: boolean;
+
+  @Prop({ type: Boolean, default: false })
+  completed?: boolean;
+
+  @Prop({ type: Date, default: null })
+  completedAt?: Date | null;
+}
+
+export const CaseOnboardingSchema =
+  SchemaFactory.createForClass(CaseOnboarding);
+
 
 
 export enum CaseWorkflowStatus {
@@ -892,6 +913,18 @@ lawyerReviewCompletedAt?: Date | null;
   default: {},
 })
 partnerInviteDetails?: PartnerInviteDetails;
+
+@Prop({
+  type: CaseOnboardingSchema,
+  default: {},
+})
+onboarding?: CaseOnboarding;
+
+@Prop({
+  type: String,
+  default: null,
+})
+agreementType?: string | null;
 
 }
 export const CaseSchema =

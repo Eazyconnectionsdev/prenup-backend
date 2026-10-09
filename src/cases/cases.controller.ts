@@ -6,6 +6,7 @@ import {
   Get,
   Param,
   Post,
+  Put,
   Req,
   UseGuards,
   NotFoundException,
@@ -19,6 +20,8 @@ import { CasesService } from './cases.service';
 import { CreateCaseDto } from './dto/create-case.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
+
+import { SaveOnboardingDto } from './dto/onboarding.dto';
 
 // IMPORTANT:
 // Use the NEW unified LawyerService.
@@ -495,4 +498,47 @@ export class CasesController {
       user.id,
     );
   }
-}
+
+  // ============================================================
+  // GET ONBOARDING
+  // GET /cases/:id/onboarding
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/onboarding')
+  async getOnboarding(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const user = this.ensureUser(req);
+    return this.casesService.getOnboarding(id, user);
+  }
+
+  // ============================================================
+  // SAVE / COMPLETE ONBOARDING
+  // POST /cases/:id/onboarding
+  // PUT  /cases/:id/onboarding
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/onboarding')
+  async saveOnboarding(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: SaveOnboardingDto,
+  ) {
+    const user = this.ensureUser(req);
+    return this.casesService.saveOnboarding(id, dto, user);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put(':id/onboarding')
+  async updateOnboarding(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: SaveOnboardingDto,
+  ) {
+    const user = this.ensureUser(req);
+    return this.casesService.saveOnboarding(id, dto, user);
+  }
+}
