@@ -358,6 +358,9 @@ export class JointInformation {
 
   @Prop({ type: Object, default: {} })
   jointLiabilitiesAndDebts?: any;
+
+  @Prop({ type: Object, default: {} })
+  matrimonialAgreement?: any;
 }
 
 export const JointInformationSchema =

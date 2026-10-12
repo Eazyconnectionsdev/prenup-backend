@@ -368,6 +368,26 @@ export class CasesController {
   }
 
   // ============================================================
+  // SEND JOINT INFORMATION FOR THE PARTNER'S APPROVAL
+  // POST /cases/:id/joint-information/submit
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/joint-information/submit')
+  async submitJointInformationForReview(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const user =
+      this.ensureUser(req);
+
+    return this.casesService.submitJointInformationForReview(
+      id,
+      user.id ?? user._id,
+    );
+  }
+
+  // ============================================================
   // APPROVE CASE
   // POST /cases/:id/approve
   // ============================================================
