@@ -20,14 +20,24 @@ import {
 
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { CaseBackup, CaseBackupDocument } from './schemas/case_backup.schema';
+import { Counter, CounterDocument } from '../common/schemas/counter.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { PartnerInviteService } from './partner-invite.service';
+import { generateCaseNumber } from '../utils/case-number.util';
 
 @Injectable()
 export class CasesService {
   private DUMMY_AGREEMENT_DRIVE_LINK = 'https://drive.google.com/file/d/FAKE_GOOGLE_DRIVE_ID/view';
-  constructor(@InjectModel(Case.name) private caseModel: Model<CaseDocument>, @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>, private config: ConfigService, private mailService: MailService, @InjectModel(CaseBackup.name,) private questionnaireBackupModel: Model<CaseBackupDocument>, private partnerInvites: PartnerInviteService) { }
+  constructor(
+    @InjectModel(Case.name) private caseModel: Model<CaseDocument>,
+    @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>,
+    private config: ConfigService,
+    private mailService: MailService,
+    @InjectModel(CaseBackup.name) private questionnaireBackupModel: Model<CaseBackupDocument>,
+    @InjectModel(Counter.name) private counterModel: Model<CounterDocument>,
+    private partnerInvites: PartnerInviteService,
+  ) { }
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
@@ -200,6 +210,8 @@ export class CasesService {
   }
 
   async create(ownerId: string, title?: string): Promise<CaseDocument> {
+    const caseNumber = await generateCaseNumber(this.counterModel);
+
     const c = new this.caseModel({
       title: title || 'Untitled case',
 
@@ -208,6 +220,8 @@ export class CasesService {
       workflowStatus: CaseWorkflowStatus.NOT_PAID,
 
       paymentCompleted: false,
+
+      caseNumber,
     });
 
     return c.save();
@@ -942,7 +956,7 @@ async rejectCaseByUser(
     ];
 
     const actorDisplayName = isOwner ? ownerName : invitedName;
-    const subject = `Agreement update — case ${c._id}`;
+    const subject = `Agreement update — case ${c.caseNumber ?? c._id}`;
     const bodyText = `Hello!
 
 ${actorDisplayName} has completed the pre-lawyer questionnaire.
@@ -964,7 +978,7 @@ ${taskLines.join('\n\n')}`;
 
     if (recipients.length === 0) {
       console.warn(
-        `No recipient emails resolved for case ${c._id} after pre-questionnaire submission`,
+        `No recipient emails resolved for case ${c.caseNumber ?? c._id} after pre-questionnaire submission`,
       );
     } else {
       await Promise.all(
@@ -987,7 +1001,7 @@ ${taskLines.join('\n\n')}`;
             }
           } catch (err) {
             console.error(
-              `Failed to send pre-questionnaire notification to ${r} for case ${c._id}`,
+              `Failed to send pre-questionnaire notification to ${r} for case ${c.caseNumber ?? c._id}`,
               err,
             );
           }
@@ -1018,7 +1032,7 @@ ${taskLines.join('\n\n')}`;
         }
       } catch (err) {
         console.error(
-          `Failed to send first-phase completed email for case ${c._id}`,
+          `Failed to send first-phase completed email for case ${c.caseNumber ?? c._id}`,
           err,
         );
       }
@@ -1027,7 +1041,7 @@ ${taskLines.join('\n\n')}`;
       try {
         await this.notifyCaseManagersOfNewCmCase(c);
       } catch (err) {
-        console.error(`Failed to notify case managers for case ${c._id}`, err);
+        console.error(`Failed to notify case managers for case ${c.caseNumber ?? c._id}`, err);
       }
     }
 
@@ -1161,10 +1175,10 @@ ${taskLines.join('\n\n')}`;
     const uniqueRecipients = Array.from(
       new Map(recipients.map((r) => [r.email, r])).values(),
     );
-    const subject = `Your case ${c._id} has been assigned a Case Manager`;
+    const subject = `Your case ${c.caseNumber ?? c._id} has been assigned a Case Manager`;
     const body = `Hello,
 
-Your case (${c._id}) has been assigned to a Case Manager.
+Your case (${c.caseNumber ?? c._id}) has been assigned to a Case Manager.
 
 Case Manager details:
 Name: ${cmDetails.name}
@@ -1280,10 +1294,10 @@ Wenup
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    const subject = `New case ready for Case Manager — ${c._id}`;
+    const subject = `New case ready for Case Manager — ${c.caseNumber ?? c._id}`;
     const body = `A case has reached the Case Manager stage.
 
-Case: ${c._id}
+Case: ${c.caseNumber ?? c._id}
 Title: ${(c as any).title ?? 'N/A'}
 
 Please login to the platform to review and manage this case.
@@ -1358,7 +1372,7 @@ Your Case Manager
     const subject = `Case moved to PAID — please re-open pre-questionnaire`;
     const body = `Hi,
 
-Your case ${c._id} has been moved to 'Paid' by the Case Manager. This means the pre-lawyer questionnaire statuses have been reset and you can now update your answers.
+Your case ${c.caseNumber ?? c._id} has been moved to 'Paid' by the Case Manager. This means the pre-lawyer questionnaire statuses have been reset and you can now update your answers.
 
 Please login to the platform and edit your pre-lawyer questionnaire and required steps.
 

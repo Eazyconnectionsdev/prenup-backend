@@ -272,6 +272,36 @@ export class LawyerController {
   }
 
   // =====================================================
+  // COMPLETED
+  // =====================================================
+
+  @Get('completed/list')
+  async completedCases(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.completedCases(
+      user.id,
+    );
+  }
+
+  // =====================================================
+  // MY CASES (active)
+  // =====================================================
+
+  @Get('cases')
+  async myCases(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.myCases(
+      user.id,
+    );
+  }
+
+  // =====================================================
   // CASE
   // =====================================================
 
@@ -681,19 +711,4 @@ export class LawyerController {
       caseId,
     );
   }
-
-  // =====================================================
-  // COMPLETED
-  // =====================================================
-
-  @Get('completed/list')
-  async completedCases(
-    @Req() req,
-  ) {
-    const user = this.ensureUser(req);
-
-    return this.lawyerService.completedCases(
-      user.id,
-    );
-  }
-}
+}

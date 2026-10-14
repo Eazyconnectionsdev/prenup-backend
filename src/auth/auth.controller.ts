@@ -32,6 +32,7 @@ import { PartnerInviteService } from '../cases/partner-invite.service';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
+import { LocationService } from '../common/location.service';
 
 // import cookie helpers from same folder (adjust path if you put cookie.utils elsewhere)
 import { DEFAULT_COOKIE_OPTIONS, cookieOptionsWithMaxAge } from './cookie.utils';
@@ -43,12 +44,13 @@ export class AuthController {
     private casesService: CasesService,
     private usersService: UsersService,
     private partnerInviteService: PartnerInviteService,
+    private locationService: LocationService,
   ) { }
 
   @Post('register')
   @HttpCode(201)
-  async register(@Body() dto: RegisterDto) {
-    const result = await this.authService.registerAndSendOtp(dto);
+  async register(@Body() dto: RegisterDto, @Req() req: Request) {
+    const result = await this.authService.registerAndSendOtp(dto, req.ip);
     return {
       message: 'Registration successful. An OTP has been sent to your email for verification.',
       email: result.email,
@@ -59,7 +61,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
 
     const user = await this.authService.validateUser(dto.email, dto.password);
     if (!user) {
@@ -69,6 +71,13 @@ export class AuthController {
     if (!user.emailVerified) {
       throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
+
+    // Capture login location (fire-and-forget)
+    void this.locationService.capture(
+      (user._id as any)?.toString?.() ?? String(user._id),
+      req.ip,
+      'login',
+    );
 
     const userCase = await this.casesService.findByCaseId(user.inviteCaseId);
 
@@ -136,8 +145,8 @@ export class AuthController {
 
   @Post('verify-otp')
   @HttpCode(200)
-  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
-    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp);
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp, req.ip);
 
     const token = signed.token;
     const expiresAt = signed.expiresAt;
@@ -190,7 +199,6 @@ export class AuthController {
     await this.authService.resendRegistrationOtp(dto.email);
     return { message: 'If that email exists and is unverified, a new OTP was sent.' };
   }
- 
 
   @Get('invite-info')
   async inviteInfo(
@@ -201,7 +209,10 @@ export class AuthController {
   }
 
   @Post('accept-invite')
-  async acceptInvite(@Body() dto: AcceptInviteDto) {
+  async acceptInvite(
+    @Body() dto: AcceptInviteDto,
+    @Req() req: Request,
+  ) {
     return this.authService.acceptInvite(
       dto.caseId,
       dto.token,
@@ -212,6 +223,7 @@ export class AuthController {
         email: dto.email,
         phone: dto.phone,
       },
+      req.ip,
     );
   }
 

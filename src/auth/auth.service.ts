@@ -15,10 +15,17 @@ import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from 'src/users/schemas/user.schema';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { LocationService } from '../common/location.service';
+
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+
+  private static readonly RESEND_COOLDOWN_MS = 60 * 1000;
+
+  private static readonly DUMMY_HASH =
+    '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.4V8y1o0xqJ1vYk0M3m1m2uZ5s3gC';
 
   constructor(
     private jwtService: JwtService,
@@ -28,14 +35,10 @@ export class AuthService {
     private casesService: CasesService,
     private partnerInviteService: PartnerInviteService,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private locationService: LocationService,
   ) { }
 
-  private static readonly RESEND_COOLDOWN_MS = 60 * 1000;
-
-  private static readonly DUMMY_HASH =
-    '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.4V8y1o0xqJ1vYk0M3m1m2uZ5s3gC';
-
-  async registerAndSendOtp(dto: any) {
+  async registerAndSendOtp(dto: any, ip?: string) {
     const {
       email,
       password,
@@ -86,6 +89,9 @@ export class AuthService {
       { new: true },
     );
 
+    // Capture registration location (fire-and-forget)
+    void this.locationService.capture(user._id.toString(), ip, 'registration');
+
     const otpResult = await this.generateAndSendVerificationOtp(user);
 
     return {
@@ -122,7 +128,7 @@ export class AuthService {
     return { otp, expiresAt: expires.getTime() };
   }
 
-  async verifyRegistrationOtp(email: string, otp: string): Promise<any> {
+  async verifyRegistrationOtp(email: string, otp: string, ip?: string): Promise<any> {
     const normalizedEmail = email?.toLowerCase?.();
 
     if (!normalizedEmail) throw new BadRequestException('Email required');
@@ -143,6 +149,9 @@ export class AuthService {
 
     await this.usersService.markEmailVerified(user._id.toString());
     await this.usersService.clearEmailVerificationOtp(user._id.toString());
+
+    // Capture login location after first successful verification (fire-and-forget)
+    void this.locationService.capture(user._id.toString(), ip, 'login');
 
     const freshUser = await this.usersService.findById(user._id.toString());
 
@@ -180,7 +189,7 @@ export class AuthService {
     const user = await this.usersService.findByEmail(email?.trim());
 
     // Always run a bcrypt compare so a missing user and a wrong password take
-    // about the same time (prevents email enumeration by timing).
+    // about the same time (prevents email enumeration by timing)
     const ok = await this.usersService.comparePassword(
       password,
       user?.passwordHash || AuthService.DUMMY_HASH,
@@ -216,6 +225,7 @@ export class AuthService {
     const hash = await this.usersService.hashPassword(newPassword);
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
+
   async acceptInvite(
     caseId: string,
     token: string,
@@ -226,6 +236,7 @@ export class AuthService {
       email?: string;
       phone?: string;
     } = {},
+    ip?: string,
   ) {
     const caseDoc = await this.casesService.findById(caseId);
     if (!caseDoc) {
@@ -381,7 +392,7 @@ export class AuthService {
       await this.mailService.sendInviteCredentials(
         email,
         password,
-        caseDoc._id.toString(),
+        caseDoc.caseNumber ?? caseDoc._id.toString(),
       );
     } catch (err) {
       this.logger?.error?.(
@@ -390,8 +401,12 @@ export class AuthService {
       );
     }
 
+    // Capture registration location for the invited partner (fire-and-forget)
+    void this.locationService.capture(createdId, ip, 'registration');
+
     return this.signUser(user);
   }
+
   async getUserProfile(id: string): Promise<User> {
     const user = await this.usersService.findById(id);
     if (!user) {
