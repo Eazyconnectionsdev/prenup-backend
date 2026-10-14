@@ -9,6 +9,7 @@ import {
   Post,
   Query,
   Patch,
+  Put,
   BadRequestException,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
@@ -30,6 +31,78 @@ export class AdminController {
 
   private isAdmin(user: any) {
     return user && (user.role === 'superadmin' || user.role === 'admin');
+  }
+
+  // ------------------- Dashboard -------------------
+  @Get('dashboard')
+  async dashboard(@Req() req) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getDashboard();
+  }
+
+  @Get('dashboard/stages')
+  async dashboardStages(@Req() req) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getDashboardStages();
+  }
+
+  @Get('dashboard/stages/:status/cases')
+  async casesByStage(
+    @Req() req,
+    @Param('status') status: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getCasesByStage(
+      status,
+      Number(page) || 1,
+      Number(limit) || 20,
+    );
+  }
+
+  // ------------------- Cases -------------------
+  @Get('cases')
+  async listCases(
+    @Req() req,
+    @Query('page') page = '1',
+    @Query('limit') limit = '50',
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.listCases(
+      Number(page) || 1,
+      Number(limit) || 50,
+      status,
+      search,
+    );
+  }
+
+  // ------------------- Settings -------------------
+  @Get('settings')
+  async getSettings(@Req() req) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getSettings();
+  }
+
+  @Patch('settings')
+  async updateSettingsPatch(@Req() req, @Body() body: any) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateSettings(body);
+  }
+
+  @Put('settings')
+  async updateSettingsPut(@Req() req, @Body() body: any) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateSettings(body);
   }
 
   // ------------------- Users -------------------
