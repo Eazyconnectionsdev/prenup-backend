@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { CasesService } from '../cases/cases.service';
+import { PartnerInviteService } from '../cases/partner-invite.service';
 import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from 'src/users/schemas/user.schema';
@@ -21,12 +22,18 @@ import { LocationService } from '../common/location.service';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
+  private static readonly RESEND_COOLDOWN_MS = 60 * 1000;
+
+  private static readonly DUMMY_HASH =
+    '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.4V8y1o0xqJ1vYk0M3m1m2uZ5s3gC';
+
   constructor(
     private jwtService: JwtService,
     private usersService: UsersService,
     private mailService: MailService,
     private config: ConfigService,
     private casesService: CasesService,
+    private partnerInviteService: PartnerInviteService,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private locationService: LocationService,
   ) { }
@@ -38,8 +45,6 @@ export class AuthService {
       firstName,
       middleName,
       lastName,
-      role = 'end_user',
-      endUserType,
       phone,
       marketingConsent = false,
       acceptedTerms,
@@ -67,8 +72,9 @@ export class AuthService {
       firstName,
       middleName,
       lastName,
-      role,
-      endUserType,
+      // Never trust client-supplied role / endUserType on public signup.
+      role: 'end_user',
+      endUserType: 'user1',
       phone: phone?.trim(),
       marketingConsent: !!marketingConsent,
       acceptedTerms: true,
@@ -163,18 +169,32 @@ export class AuthService {
       return;
     }
 
+    // Cooldown: ignore resend if the current OTP was issued under 60s ago.
+    // Works for expired OTPs too (they were issued long ago).
+    const expiryMs =
+      Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000;
+    const issuedAt = user.emailVerificationOtpExpires
+      ? user.emailVerificationOtpExpires.getTime() - expiryMs
+      : 0;
+    if (Date.now() - issuedAt < AuthService.RESEND_COOLDOWN_MS) {
+      throw new BadRequestException(
+        'Please wait a minute before requesting another code',
+      );
+    }
+
     await this.generateAndSendVerificationOtp(user);
   }
 
   async validateUser(email: string, password: string) {
-    const user = await this.usersService.findByEmail(email);
+    const user = await this.usersService.findByEmail(email?.trim());
 
-    if (!user) return null;
+    // Always run a bcrypt compare so a missing user and a wrong password take
+    // about the same time (prevents email enumeration by timing)
     const ok = await this.usersService.comparePassword(
       password,
-      user.passwordHash,
+      user?.passwordHash || AuthService.DUMMY_HASH,
     );
-    if (!ok) return null;
+    if (!user || !ok) return null;
     return user;
   }
 
@@ -205,10 +225,17 @@ export class AuthService {
     const hash = await this.usersService.hashPassword(newPassword);
     await this.usersService.updatePassword(user._id.toString(), hash);
   }
+
   async acceptInvite(
     caseId: string,
     token: string,
     password: string,
+    profile: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      phone?: string;
+    } = {},
     ip?: string,
   ) {
     const caseDoc = await this.casesService.findById(caseId);
@@ -250,8 +277,11 @@ export class AuthService {
       );
     }
 
-    const email =
-      partner.email.toLowerCase();
+    // The partner may register with their own email/name/phone. If the email
+    // differs from the one invited, it is unverified until they confirm an OTP.
+    const invitedEmail = partner.email.toLowerCase();
+    const email = (profile.email?.trim() || invitedEmail).toLowerCase();
+    const emailChanged = email !== invitedEmail;
     const existing =
       await this.usersService.findByEmail(
         email,
@@ -263,9 +293,11 @@ export class AuthService {
       );
     }
 
+    const firstName = profile.firstName?.trim() || partner.firstName;
+    const lastName = profile.lastName?.trim() || partner.lastName;
     const fullName = [
-      partner.firstName,
-      partner.lastName,
+      firstName,
+      lastName,
     ]
       .filter(Boolean)
 
@@ -285,15 +317,16 @@ export class AuthService {
         await this.usersService.create({
           email,
           passwordHash,
-          firstName: partner.firstName,
+          firstName,
 
-          lastName: partner.lastName,
+          lastName,
+          phone: profile.phone?.trim() || partner.mobileNumber || null,
           role: 'end_user',
           endUserType: 'user2',
           invitedBy: caseDoc.owner,
           inviteCaseId: caseDoc._id,
           acceptedTerms: true,
-          emailVerified: true,
+          emailVerified: !emailChanged,
         } as any);
     } catch (err) {
       this.logger?.error?.(
@@ -342,16 +375,18 @@ export class AuthService {
       createdId,
     );
 
-    await this.casesService.setInviteCredentials(
-      caseId,
+    // Track who actually registered (compared with what the inviter typed).
+    await this.partnerInviteService.markAccepted(caseId, user as any);
 
-      {
+    // Different email: it must be verified before the partner can sign in.
+    if (emailChanged) {
+      await this.generateAndSendVerificationOtp(user);
+      return {
+        success: true,
+        requiresEmailVerification: true,
         email,
-        password,
-        createdAt: new Date(),
-      },
-
-    );
+      };
+    }
 
     try {
       await this.mailService.sendInviteCredentials(
@@ -362,18 +397,16 @@ export class AuthService {
     } catch (err) {
       this.logger?.error?.(
         'Failed to send invite credentials email',
-
         err as any,
-
       );
     }
-
 
     // Capture registration location for the invited partner (fire-and-forget)
     void this.locationService.capture(createdId, ip, 'registration');
 
     return this.signUser(user);
   }
+
   async getUserProfile(id: string): Promise<User> {
     const user = await this.usersService.findById(id);
     if (!user) {

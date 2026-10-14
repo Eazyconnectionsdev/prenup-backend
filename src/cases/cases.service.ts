@@ -23,6 +23,7 @@ import { CaseBackup, CaseBackupDocument } from './schemas/case_backup.schema';
 import { Counter, CounterDocument } from '../common/schemas/counter.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
+import { PartnerInviteService } from './partner-invite.service';
 import { generateCaseNumber } from '../utils/case-number.util';
 
 @Injectable()
@@ -35,6 +36,7 @@ export class CasesService {
     private mailService: MailService,
     @InjectModel(CaseBackup.name) private questionnaireBackupModel: Model<CaseBackupDocument>,
     @InjectModel(Counter.name) private counterModel: Model<CounterDocument>,
+    private partnerInvites: PartnerInviteService,
   ) { }
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
@@ -116,6 +118,11 @@ export class CasesService {
       field: 'jointLiabilitiesAndDebts',
     },
 
+    'matrimonial-agreement': {
+      section: 'jointInformation',
+      field: 'matrimonialAgreement',
+    },
+
     'solicitor-details': {
       section: 'independentLegalAdvice',
       field: 'solicitorDetails',
@@ -168,7 +175,16 @@ export class CasesService {
     } as PreQuestionnaire;
   }
   private hasData(value: unknown): boolean {
-    return !!value && typeof value === 'object' && Object.keys(value).length > 0;
+    if (!value || typeof value !== 'object') return false;
+
+    // Typed sub-schemas (the matrimonial agreement) arrive as mongoose
+    // subdocuments, whose own enumerable properties are internals
+    const plain =
+      typeof (value as any).toObject === 'function'
+        ? (value as any).toObject()
+        : value;
+
+    return Object.keys(plain).length > 0;
   }
 
   // Joint section is awaiting the partner's approval: submitted via its last form
@@ -178,7 +194,9 @@ export class CasesService {
     return (
       !!status?.submitted &&
       !status.locked &&
-      this.hasData((c as any).jointInformation?.jointLiabilitiesAndDebts)
+      (this.hasData((c as any).jointInformation?.matrimonialAgreement) ||
+        // cases created before the matrimonial agreement form existed
+        this.hasData((c as any).jointInformation?.jointLiabilitiesAndDebts))
     );
   }
 
@@ -260,12 +278,68 @@ export class CasesService {
     return c.save();
   }
 
+  // Onboarding belongs to the case owner (user 1) only; the invited partner
+  // (user 2) never goes through it.
+  async getOnboarding(caseId: string, userId: string) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId).lean().exec();
+    if (!c) throw new NotFoundException('Case not found');
+    if (c.owner?.toString() !== userId.toString()) {
+      throw new ForbiddenException('Forbidden');
+    }
+    return {
+      completed: !!c.onboarding?.completed,
+      agreementType: c.agreementType ?? null,
+      completedAt: c.onboarding?.completedAt ?? null,
+    };
+  }
+
+  async completeOnboarding(
+    caseId: string,
+    userId: string,
+    dto: { agreementType: string; residesInUK: boolean; },
+  ) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+    if (c.owner?.toString() !== userId.toString()) {
+      throw new ForbiddenException('Only the case owner can complete onboarding');
+    }
+
+    const prev = c.onboarding;
+    c.agreementType = dto.agreementType;
+    c.onboarding = {
+      completed: true,
+      completedAt: prev?.completedAt ?? new Date(),
+      completedBy: prev?.completedBy ?? new Types.ObjectId(userId),
+      residesInUK: dto.residesInUK,
+    } as any;
+    await c.save();
+
+    return {
+      completed: true,
+      agreementType: c.agreementType,
+      completedAt: c.onboarding?.completedAt,
+    };
+  }
+
+  getInvite(caseId: string) {
+    return this.partnerInvites.getForCase(caseId);
+  }
+
   async invite(caseId: string, inviterId: string, dto: InvitePartnerDto) {
     const c = await this.caseModel.findById(caseId);
 
     if (!c) {
       throw new NotFoundException('Case not found');
     }
+
+    // A partner who already joined can't be re-invited.
+    await this.partnerInvites.assertCanInvite(caseId);
 
     const token = crypto.randomBytes(32).toString('hex');
 
@@ -295,6 +369,9 @@ export class CasesService {
     };
 
     await c.save();
+
+    // Track the invite (status, opens, resends, who registered).
+    await this.partnerInvites.recordSent(caseId, inviterId, dto, token, expires);
 
     const params = new URLSearchParams({
       token,
@@ -417,11 +494,16 @@ export class CasesService {
     const isOwner = c.owner?.toString() === actorId.toString();
     const isInvited = c.invitedUser?.toString() === actorId.toString();
 
+    // A locked section is read-only for the couple, whichever form it came
+    // from: once both partners confirm, the case belongs to the case manager.
+    if (!isPrivileged && c.status?.[config.section]?.locked) {
+      throw new BadRequestException('This section is already locked');
+    }
 
-    // Joint information is filled in over three forms but reviewed as one section.
-    // The same turn/lock rules apply to all three forms.
+
+    // Joint information is filled in over several forms but reviewed as one
+    // section. The same turn/lock rules apply to every one of those forms.
     const isJointStep = config.section === 'jointInformation';
-    const isFinalJointStep = stepName === 'joint-liabilities-and-debts';
 
     if (isJointStep && !isPrivileged) {
       const existing = c.status?.jointInformation;
@@ -452,48 +534,19 @@ export class CasesService {
       }
     }
 
-    // The joint section only goes for review once all three joint forms are filled in
-    if (isFinalJointStep) {
-      const joint = (c as any).jointInformation || {};
-      if (!this.hasData(joint.jointAssets) || !this.hasData(joint.jointIncomeAndRevenue)) {
-        throw new BadRequestException(
-          'Please complete Joint Assets and Joint Income before submitting for approval',
-        );
-      }
-    }
-
     const { section, field } = config;
     (c as any)[section] = (c as any)[section] || {};
     (c as any)[section][field] = data;
     c.markModified(section);
 
-    // Earlier joint forms are only saved; the last one submits the whole section
-    if (!isJointStep || isFinalJointStep) {
+    // Joint forms, including the last one, only save. The section goes to the
+    // partner for approval when its owner asks for it from the final review
+    // page (submitJointInformationForReview) — never as a side effect of a save.
+    if (!isJointStep) {
       const status = this.ensureSectionStatus(c, section);
       status.submitted = true;
       status.submittedBy = new Types.ObjectId(actorId);
       status.submittedAt = new Date();
-    }
-
-    if (isFinalJointStep) {
-      const approval = this.ensureApprovalObj(c);
-      const now = new Date();
-
-      if (isOwner) {
-        approval.user1Approved = true;
-        approval.user1ApprovedAt = now;
-        approval.user2Approved = false;
-        approval.user2ApprovedAt = null;
-      } else {
-        approval.user2Approved = true;
-        approval.user2ApprovedAt = now;
-        approval.user1Approved = false;
-        approval.user1ApprovedAt = null;
-      }
-
-      approval.disapprovedBy = null;
-      approval.disapprovedAt = null;
-      approval.disapprovalReason = null;
     }
 
     if (stepName === 'review-and-sign') {
@@ -522,6 +575,97 @@ export class CasesService {
     return c;
   }
 
+  // Explicitly ask the other partner to review and approve the information.
+  // This is the only thing that starts an approval round: filling in the forms
+  // (the matrimonial agreement included) just saves them.
+  async submitJointInformationForReview(
+    caseId: string,
+    actorId: string,
+  ): Promise<CaseDocument> {
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const isOwner = c.owner?.toString() === actorId.toString();
+    const isInvited = c.invitedUser?.toString() === actorId.toString();
+    if (!isOwner && !isInvited) throw new ForbiddenException('Not part of case');
+
+    if (!c.invitedUser) {
+      throw new BadRequestException(
+        'Your partner has not joined the case yet, so there is nobody to review this.',
+      );
+    }
+
+    const status = this.ensureSectionStatus(c, 'jointInformation');
+
+    if (status.locked) {
+      throw new BadRequestException('This section is already locked');
+    }
+    if (this.isJointReviewPending(c)) {
+      throw new BadRequestException(
+        'This section is already pending review by the other party',
+      );
+    }
+
+    const joint = (c as any).jointInformation || {};
+    if (
+      !this.hasData(joint.jointAssets) ||
+      !this.hasData(joint.jointIncomeAndRevenue) ||
+      !this.hasData(joint.jointLiabilitiesAndDebts) ||
+      !this.hasData(joint.matrimonialAgreement)
+    ) {
+      throw new BadRequestException(
+        'Please complete Joint Assets, Joint Income, Joint Liabilities and the Matrimonial Agreement before sending this for approval',
+      );
+    }
+
+    // Owner sends the first round; after a disapproval it is the partner who
+    // disapproved that fixes the information and sends the next one.
+    const alreadySubmittedBy = status.submittedBy
+      ? status.submittedBy.toString()
+      : null;
+    const canSubmit =
+      alreadySubmittedBy === null
+        ? isOwner
+        : alreadySubmittedBy === actorId.toString();
+
+    if (!canSubmit) {
+      throw new ForbiddenException(
+        alreadySubmittedBy === null
+          ? 'Only the case owner can send this section for approval'
+          : 'It is not your turn to send this section for approval',
+      );
+    }
+
+    const now = new Date();
+    status.submitted = true;
+    status.submittedBy = new Types.ObjectId(actorId);
+    status.submittedAt = now;
+    c.markModified('status');
+
+    // Sending for review is the sender's own approval of this version; the
+    // other partner's approval is what completes the round.
+    const approval = this.ensureApprovalObj(c);
+
+    if (isOwner) {
+      approval.user1Approved = true;
+      approval.user1ApprovedAt = now;
+      approval.user2Approved = false;
+      approval.user2ApprovedAt = null;
+    } else {
+      approval.user2Approved = true;
+      approval.user2ApprovedAt = now;
+      approval.user1Approved = false;
+      approval.user1ApprovedAt = null;
+    }
+
+    approval.disapprovedBy = null;
+    approval.disapprovedAt = null;
+    approval.disapprovalReason = null;
+
+    await c.save();
+    return c;
+  }
+
   async approveCaseByUser(
   caseId: string,
   actorId: string,
@@ -534,16 +678,19 @@ export class CasesService {
   if (!isOwner && !isInvited) throw new ForbiddenException('Not part of case');
 
   const jointStatus = c.status?.jointInformation;
-  if (!jointStatus || !this.isJointReviewPending(c)) {
-    throw new BadRequestException('Nothing pending review for this section');
-  }
-  if (jointStatus.locked) {
+  if (jointStatus?.locked) {
     throw new BadRequestException('Section is already locked');
+  }
+  if (!jointStatus || !this.isJointReviewPending(c)) {
+    throw new BadRequestException(
+      'Nothing is pending review: the joint information has not been submitted yet.',
+    );
   }
   if (jointStatus.submittedBy?.toString() === actorId.toString()) {
     throw new BadRequestException('You cannot approve your own submission');
   }
 
+  let movedToCaseManager = false;
   const approval = this.ensureApprovalObj(c);
   const now = new Date();
 
@@ -559,9 +706,33 @@ export class CasesService {
     jointStatus.locked = true;
     jointStatus.lockedBy = new Types.ObjectId(actorId);
     jointStatus.lockedAt = now;
+
+    // Both partners have confirmed: freeze the couple-facing sections and
+    // hand the case to a case manager. Independent legal advice stays open.
+    for (const name of ['myInformation', 'partnerInformation', 'jointInformation']) {
+      const s = this.ensureSectionStatus(c, name);
+      if (!s.locked && s.submitted) {
+        s.locked = true;
+        s.lockedBy = new Types.ObjectId(actorId);
+        s.lockedAt = now;
+      }
+    }
+    c.markModified('status');
+
+    c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
+    movedToCaseManager = true;
   }
 
   await c.save();
+
+  if (movedToCaseManager) {
+    try {
+      await this.notifyCaseManagersOfNewCmCase(c);
+    } catch (err) {
+      console.error(`Failed to notify case managers for case ${c._id}`, err);
+    }
+  }
+
   return c;
 }
 
@@ -578,8 +749,13 @@ async rejectCaseByUser(
   if (!isOwner && !isInvited) throw new ForbiddenException('Not part of case');
 
   const jointStatus = c.status?.jointInformation;
+  if (jointStatus?.locked) {
+    throw new BadRequestException('Section is already locked');
+  }
   if (!jointStatus || !this.isJointReviewPending(c)) {
-    throw new BadRequestException('Nothing pending review for this section');
+    throw new BadRequestException(
+      'Nothing is pending review: the joint information has not been submitted yet.',
+    );
   }
   if (jointStatus.submittedBy?.toString() === actorId.toString()) {
     throw new BadRequestException('You cannot disapprove your own submission');

@@ -1,5 +1,6 @@
 
 import { IsString, IsNotEmpty, IsOptional, IsMongoId } from 'class-validator';
+import { IsValidPhone } from '../../common/is-valid-phone.decorator';
 
 export class CreateLawyerDto {
   @IsString()
@@ -29,6 +30,7 @@ export class CreateLawyerDto {
 
   @IsOptional()
   @IsString()
+  @IsValidPhone()
   publicPhone?: string;
 
   @IsOptional()
@@ -37,6 +39,7 @@ export class CreateLawyerDto {
 
   @IsOptional()
   @IsString()
+  @IsValidPhone()
   directPhone?: string;
 
   @IsOptional()

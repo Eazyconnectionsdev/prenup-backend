@@ -8,6 +8,7 @@ import {
   Matches,
   ValidateIf,
 } from 'class-validator';
+import { IsValidPhone } from '../../common/is-valid-phone.decorator';
 
 export class UpdateUserProfileDto {
   @IsOptional()
@@ -38,9 +39,7 @@ export class UpdateUserProfileDto {
 
   @IsOptional()
   @IsString()
-  @Matches(/^$|^\+?[0-9\s\-()]{7,20}$/, {
-    message: 'phone must be a valid phone number',
-  })
+  @IsValidPhone()
   phone?: string;
 
   @IsOptional()
