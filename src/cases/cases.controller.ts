@@ -20,6 +20,7 @@ import { CreateCaseDto } from './dto/create-case.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
+import { MatrimonialAgreementDto } from './dto/matrimonial-agreement.dto';
 
 // IMPORTANT:
 // Use the NEW unified LawyerService.
@@ -285,6 +286,32 @@ export class CasesController {
       id,
       sectionName,
       user,
+    );
+  }
+
+  // ============================================================
+  // MATRIMONIAL AGREEMENT & INTENTIONS
+  // POST /cases/:id/questionnaire/matrimonial-agreement
+  //
+  // Declared before the generic step route below so this step gets validated
+  // against its DTO instead of being stored as a free-form body.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/questionnaire/matrimonial-agreement')
+  async updateMatrimonialAgreement(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: MatrimonialAgreementDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.updateQuestionnaireStep(
+      id,
+      'matrimonial-agreement',
+      body,
+      user.id ?? user._id,
+      this.isPrivilegedRole(user.role),
     );
   }
 

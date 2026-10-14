@@ -165,7 +165,16 @@ export class CasesService {
     } as PreQuestionnaire;
   }
   private hasData(value: unknown): boolean {
-    return !!value && typeof value === 'object' && Object.keys(value).length > 0;
+    if (!value || typeof value !== 'object') return false;
+
+    // Typed sub-schemas (the matrimonial agreement) arrive as mongoose
+    // subdocuments, whose own enumerable properties are internals
+    const plain =
+      typeof (value as any).toObject === 'function'
+        ? (value as any).toObject()
+        : value;
+
+    return Object.keys(plain).length > 0;
   }
 
   // Joint section is awaiting the partner's approval: submitted via its last form
@@ -276,7 +285,7 @@ export class CasesService {
   async completeOnboarding(
     caseId: string,
     userId: string,
-    dto: { agreementType: string; residesInUK: boolean; understandsService: boolean },
+    dto: { agreementType: string; residesInUK: boolean; },
   ) {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
@@ -294,7 +303,6 @@ export class CasesService {
       completedAt: prev?.completedAt ?? new Date(),
       completedBy: prev?.completedBy ?? new Types.ObjectId(userId),
       residesInUK: dto.residesInUK,
-      understandsService: dto.understandsService,
     } as any;
     await c.save();
 

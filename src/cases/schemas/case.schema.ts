@@ -40,8 +40,6 @@ export const PartnerInviteDetailsSchema =
 
 
 
-// Service type chosen by user 1 during onboarding.
-// 'help-choose' means the user is still undecided.
 export const AGREEMENT_TYPES = [
   'prenup-marriage',
   'prenup-civil',
@@ -64,9 +62,6 @@ export class OnboardingInfo {
 
   @Prop({ type: Boolean, default: false })
   residesInUK!: boolean;
-
-  @Prop({ type: Boolean, default: false })
-  understandsService!: boolean;
 }
 
 export const OnboardingInfoSchema = SchemaFactory.createForClass(OnboardingInfo);
@@ -345,6 +340,196 @@ export const PartnerInformationSchema =
   );
 
 //
+// MATRIMONIAL AGREEMENT & INTENTIONS
+//
+
+export const FUTURE_ASSETS_TREATMENTS = [
+  'SeparateToAcquirer',
+  'FamilyUseJoint',
+  'PooledEqually',
+  'Custom',
+] as const;
+
+export const FUTURE_GIFTS_TREATMENTS = [
+  'SeparateToRecipient',
+  'JointEqually',
+  'Custom',
+] as const;
+
+export const INHERITANCE_SELECTIONS = ['NoneExpected', 'LogDetails'] as const;
+
+export const INHERITANCE_STATUSES = [
+  'FutureExpectation',
+  'PendingProbate',
+] as const;
+
+export const SPOUSAL_MAINTENANCE_INTENTIONS = [
+  'MutualWaiver',
+  'CareerSacrificeOnly',
+  'Custom',
+] as const;
+
+export const CRITICAL_ILLNESS_SAFEGUARDS = [
+  'TermsFixed',
+  'Voidable',
+  'Custom',
+] as const;
+
+export const DEATH_WILLS_ALIGNMENTS = [
+  'MirrorDivorce',
+  'ProvideDifferently',
+  'Unsure',
+] as const;
+
+export const REVIEW_TRIGGER_TYPES = ['Never', 'Standard', 'Custom'] as const;
+
+export const STANDARD_MILESTONES = [
+  'child_birth',
+  'career_change',
+  '5_year',
+  '10_year',
+] as const;
+
+export const ASSET_TREATMENTS = [
+  'KeepSeparate',
+  'ShareEqually',
+  'Contribution',
+  'Percentage',
+  'Custom',
+] as const;
+
+export const INHERITANCE_CURRENCIES = [
+  'GBP',
+  'USD',
+  'EUR',
+  'AUD',
+  'CAD',
+] as const;
+
+// One expected or pending inheritance in the register. Amounts are kept as
+// entered (strings) so a partly filled row never fails to save.
+@Schema({ _id: false })
+export class InheritanceEntry {
+  @Prop({ type: String, default: null })
+  id?: string | null;
+
+  @Prop({ type: String, default: null })
+  recipientPartner?: string | null;
+
+  @Prop({ type: String, enum: INHERITANCE_STATUSES, default: null })
+  inheritanceStatus?: string | null;
+
+  @Prop({ type: String, default: null })
+  composition?: string | null;
+
+  @Prop({ type: String, default: null })
+  originalAmount?: string | null;
+
+  @Prop({ type: String, enum: INHERITANCE_CURRENCIES, default: null })
+  originalCurrency?: string | null;
+
+  @Prop({ type: String, default: null })
+  gbpEquivalent?: string | null;
+
+  @Prop({ type: String, default: null })
+  basisOfEstimate?: string | null;
+
+  @Prop({ type: String, enum: ASSET_TREATMENTS, default: null })
+  treatment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  contributionText?: string;
+
+  @Prop({ type: String, default: '' })
+  percentageValue?: string;
+
+  @Prop({ type: String, default: '' })
+  customText?: string;
+}
+
+export const InheritanceEntrySchema =
+  SchemaFactory.createForClass(InheritanceEntry);
+
+// The enforceability gates: any 'Yes' flags the case for the case manager.
+@Schema({ _id: false })
+export class SpecialCircumstances {
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  pregnancyOrAdoption?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  sharedBusiness?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  financialReliance?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  coOwnedRealEstate?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  highValueAssets?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  priorDependents?: string;
+}
+
+export const SpecialCircumstancesSchema =
+  SchemaFactory.createForClass(SpecialCircumstances);
+
+@Schema({ _id: false })
+export class MatrimonialAgreement {
+  @Prop({ type: String, enum: FUTURE_ASSETS_TREATMENTS, default: null })
+  futureAssetsTreatment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customFutureAssets?: string;
+
+  @Prop({ type: String, enum: FUTURE_GIFTS_TREATMENTS, default: null })
+  futureGiftsTreatment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customFutureGifts?: string;
+
+  @Prop({ type: String, enum: INHERITANCE_SELECTIONS, default: null })
+  inheritanceSelection?: string | null;
+
+  @Prop({ type: [InheritanceEntrySchema], default: [] })
+  inheritanceEntries?: InheritanceEntry[];
+
+  @Prop({ type: String, enum: SPOUSAL_MAINTENANCE_INTENTIONS, default: null })
+  spousalMaintenanceIntention?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customSpousalMaintenance?: string;
+
+  @Prop({ type: String, enum: CRITICAL_ILLNESS_SAFEGUARDS, default: null })
+  criticalIllnessSafeguard?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customHealthSafeguards?: string;
+
+  @Prop({ type: String, enum: DEATH_WILLS_ALIGNMENTS, default: null })
+  deathWillsAlignment?: string | null;
+
+  @Prop({ type: String, enum: REVIEW_TRIGGER_TYPES, default: null })
+  reviewTriggerType?: string | null;
+
+  @Prop({ type: [String], enum: STANDARD_MILESTONES, default: [] })
+  standardMilestones?: string[];
+
+  @Prop({ type: String, default: '' })
+  customReviewTriggers?: string;
+
+  @Prop({ type: SpecialCircumstancesSchema, default: {} })
+  specialCircumstances?: SpecialCircumstances;
+
+  @Prop({ type: String, default: '' })
+  specialCircumstancesOverview?: string;
+}
+
+export const MatrimonialAgreementSchema =
+  SchemaFactory.createForClass(MatrimonialAgreement);
+
+//
 // JOINT INFORMATION
 //
 
@@ -359,8 +544,10 @@ export class JointInformation {
   @Prop({ type: Object, default: {} })
   jointLiabilitiesAndDebts?: any;
 
-  @Prop({ type: Object, default: {} })
-  matrimonialAgreement?: any;
+  // No default: the joint section counts this form as filled in as soon as the
+  // field exists, so it must stay absent until the couple actually saves it
+  @Prop({ type: MatrimonialAgreementSchema })
+  matrimonialAgreement?: MatrimonialAgreement;
 }
 
 export const JointInformationSchema =
