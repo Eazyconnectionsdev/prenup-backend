@@ -1,11 +1,11 @@
 
-import { IsString, IsNotEmpty, IsOptional, IsMongoId } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsMongoId, IsEmail, MinLength } from 'class-validator';
 import { IsValidPhone } from '../../common/is-valid-phone.decorator';
 
 export class CreateLawyerDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  externalId: string;
+  externalId?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -23,6 +23,18 @@ export class CreateLawyerDto {
   @IsNotEmpty()
   @IsMongoId()
   company: string; // company ObjectId (string form) - will be converted in service
+
+  // ── Login account fields (creates a User with role=lawyer) ──────────────────
+  /** The email address the lawyer will use to log in. Required to create a login account. */
+  @IsEmail()
+  @IsNotEmpty()
+  loginEmail: string;
+
+  /** Plaintext password for the lawyer login. Will be hashed before storage. */
+  @IsString()
+  @MinLength(8)
+  @IsNotEmpty()
+  password: string;
 
   @IsOptional()
   @IsString()
@@ -61,4 +73,4 @@ export class CreateLawyerDto {
   @IsOptional()
   @IsString()
   notes?: string;
-}
+}
