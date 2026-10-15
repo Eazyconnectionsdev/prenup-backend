@@ -198,32 +198,138 @@ export class AuthService {
     return user;
   }
 
+  /**
+   * Starts the "forgot password" flow. Always resolves silently for unknown
+   * or recently-mailed addresses so the response cannot be used to probe
+   * which emails exist.
+   */
   async requestPasswordReset(email: string) {
-    const user = await this.usersService.findByEmail(email);
+    const normalizedEmail = email?.trim().toLowerCase();
+    if (!normalizedEmail) return;
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
     if (!user) {
       // do not leak
       return;
     }
-    const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(
-      Date.now() +
-      Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
+
+    // Throttle: if a still-valid link was issued less than a minute ago,
+    // don't mail another one (and don't tell the caller either).
+    const expiryHours = Number(
+      this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2,
     );
-    await this.usersService.setResetToken(user._id.toString(), token, expires);
-    const resetUrl = `${this.config.get('APP_BASE_URL')}/auth/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
-    await this.mailService.sendReset(user.email, resetUrl);
+    const expiryMs = expiryHours * 3600 * 1000;
+    const issuedAt = user.resetPasswordExpires
+      ? user.resetPasswordExpires.getTime() - expiryMs
+      : 0;
+    if (
+      user.resetPasswordToken &&
+      Date.now() - issuedAt < AuthService.RESEND_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + expiryMs);
+
+    // Only the digest is stored: a leaked database dump cannot be used to
+    // reset anyone's password.
+    await this.usersService.setResetToken(
+      user._id.toString(),
+      AuthService.hashResetToken(token),
+      expires,
+    );
+
+    const baseUrl = String(
+      this.config.get('APP_BASE_URL') || this.config.get('FRONTEND_URL') || '',
+    ).replace(/\/+$/, '');
+    const resetUrl = `${baseUrl}/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
+
+    try {
+      await this.mailService.sendReset(user.email, resetUrl, { expiryHours });
+    } catch (err) {
+      this.logger.error('Failed to send password reset email', err as any);
+    }
+  }
+
+  /**
+   * Checks a reset link without consuming it, so the reset page can show an
+   * "expired link" state instead of a form the user cannot submit.
+   */
+  async validateResetToken(email: string, token: string) {
+    const user = await this.findUserByResetToken(email, token);
+    return { valid: true, email: user.email };
   }
 
   async resetPassword(email: string, token: string, newPassword: string) {
-    const user = await this.usersService.findByEmail(email);
-    if (!user) throw new NotFoundException('User not found');
-    if (!user.resetPasswordToken || user.resetPasswordToken !== token)
+    const user = await this.findUserByResetToken(email, token);
 
-      throw new BadRequestException('Invalid token');
-    if (!user.resetPasswordExpires || user.resetPasswordExpires < new Date())
-      throw new BadRequestException('Token expired');
+    // Reusing the old password would leave the account on a credential the
+    // user just asked to replace.
+    const sameAsOld = await this.usersService.comparePassword(
+      newPassword,
+      user.passwordHash || AuthService.DUMMY_HASH,
+    );
+    if (sameAsOld) {
+      throw new BadRequestException(
+        'Choose a password you have not used before',
+      );
+    }
+
     const hash = await this.usersService.hashPassword(newPassword);
+    // Also clears the reset token, so the link is single-use.
     await this.usersService.updatePassword(user._id.toString(), hash);
+
+    // A verified password implies a reachable inbox: an account that was
+    // stuck unverified can sign in once the reset completes.
+    if (!user.emailVerified) {
+      await this.usersService.markEmailVerified(user._id.toString());
+    }
+
+    try {
+      await this.mailService.sendPasswordChanged(user.email);
+    } catch (err) {
+      this.logger.error('Failed to send password-changed email', err as any);
+    }
+  }
+
+  /**
+   * Resolves the user behind a reset link, rejecting unknown emails, wrong
+   * tokens and expired tokens with the same generic message.
+   */
+  private async findUserByResetToken(email: string, token: string) {
+    const normalizedEmail = email?.trim().toLowerCase();
+    const trimmedToken = token?.trim();
+    const invalid = new BadRequestException(
+      'This password reset link is invalid or has expired',
+    );
+
+    if (!normalizedEmail || !trimmedToken) throw invalid;
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
+    if (!user?.resetPasswordToken) throw invalid;
+
+    const expected = Buffer.from(user.resetPasswordToken);
+    const actual = Buffer.from(AuthService.hashResetToken(trimmedToken));
+    if (
+      expected.length !== actual.length ||
+      !crypto.timingSafeEqual(expected, actual)
+    ) {
+      throw invalid;
+    }
+
+    if (
+      !user.resetPasswordExpires ||
+      user.resetPasswordExpires.getTime() < Date.now()
+    ) {
+      throw invalid;
+    }
+
+    return user;
+  }
+
+  private static hashResetToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
   }
 
   async acceptInvite(

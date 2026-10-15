@@ -232,17 +232,34 @@ export class MailService implements OnModuleInit {
     return this.sendRaw({ to: email, subject, text, html });
   }
 
-  async sendReset(email: string, resetUrl: string) {
+  async sendReset(email: string, resetUrl: string, opts?: { expiryHours?: number }) {
+    const hours = opts?.expiryHours;
+    const validity = hours
+      ? `This link is valid for ${hours} hour${hours === 1 ? '' : 's'} and can only be used once.`
+      : 'This link is valid for a limited time and can only be used once.';
     const subject = 'Reset Your Wenup Password';
-    const text = `We received a request to reset your password.\nClick the link to proceed: ${resetUrl}\n\nIf you did not request this, please ignore this email.`;
+    const text = `We received a request to reset your password.\nClick the link to proceed: ${resetUrl}\n\n${validity}\n\nIf you did not request this, please ignore this email.`;
     const html = buildEmailHtml({
       eyebrow: 'Password Reset',
       heading: 'Reset Your Password',
       icon: '🔑',
-      body: `We received a request to reset the password for your Wenup account.<br/><br/>Click the button below to choose a new password. This link is valid for a limited time.`,
+      body: `We received a request to reset the password for your Wenup account.<br/><br/>Click the button below to choose a new password.<br/><br/>${validity}`,
       ctaLabel: 'Reset Password',
       ctaUrl: resetUrl,
-      footerNote: 'If you did not request a password reset, you can safely ignore this email.',
+      footerNote: 'If you did not request a password reset, you can safely ignore this email and your password will stay the same.',
+    });
+    return this.sendRaw({ to: email, subject, text, html });
+  }
+
+  async sendPasswordChanged(email: string) {
+    const subject = 'Your Wenup Password Was Changed';
+    const text = `Your Wenup password was just changed.\n\nIf this wasn't you, please reset your password immediately and contact support.`;
+    const html = buildEmailHtml({
+      eyebrow: 'Security Alert',
+      heading: 'Your Password Was Changed',
+      icon: '🔒',
+      body: `The password for your Wenup account (<strong>${email}</strong>) was just changed.<br/><br/>You can now sign in with your new password.`,
+      footerNote: `If you did not make this change, please reset your password immediately and contact support.`,
     });
     return this.sendRaw({ to: email, subject, text, html });
   }
