@@ -2,24 +2,27 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as bcrypt from 'bcrypt';
 import { Company, CompanyDocument } from './schemas/company.schema';
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { Enquiry, EnquiryDocument } from './schemas/enquiry.schema';
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
-import { User } from '../users/schemas/user.schema';
+import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
+import { User, UserDocument } from '../users/schemas/user.schema';
 import { Case, CaseDocument, CaseWorkflowStatus } from '../cases/schemas/case.schema';
 import { Settings, SettingsDocument } from './schemas/settings.schema';
 
 @Injectable()
 export class AdminService {
   constructor(
-    @InjectModel(User.name) private userModel: Model<any>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Company.name) private companyModel: Model<CompanyDocument>,
     @InjectModel(Lawyer.name) private lawyerModel: Model<LawyerDocument>,
     @InjectModel(Enquiry.name) private enquiryModel: Model<EnquiryDocument>,
     @InjectModel(Case.name) private caseModel: Model<CaseDocument>,
     @InjectModel(Settings.name) private settingsModel: Model<SettingsDocument>,
   ) {}
+
 
   // ---------------- Dashboard -----------------
   async getDashboard() {
@@ -235,6 +238,13 @@ export class AdminService {
     return { total, docs };
   }
 
+  async getCompanyById(id: string) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid company id');
+    const doc = await this.companyModel.findById(id).lean().exec();
+    if (!doc) throw new NotFoundException('Company not found');
+    return doc;
+  }
+
   async createCompany(payload: Partial<Company>) {
     const doc = new this.companyModel(payload);
     return doc.save();
@@ -255,10 +265,18 @@ export class AdminService {
     return { total, docs };
   }
 
+  async getLawyerById(id: string) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
+    const doc = await this.lawyerModel.findById(id).populate('company').lean().exec();
+    if (!doc) throw new NotFoundException('Lawyer not found');
+    return doc;
+  }
+
   /**
-   * Create a lawyer from a CreateLawyerDto. This converts the incoming `company` string
-   * into a Types.ObjectId and validates that the company exists. This keeps TypeScript
-   * types clean and prevents runtime surprises.
+   * Create a lawyer profile AND its associated login account (User with role=lawyer).
+   * The account is created pre-verified so the lawyer can log in immediately.
+   * Both the Lawyer document and the User document are cross-linked via
+   * `userId` on the Lawyer and `lawyerProfile` on the User.
    */
   async createLawyer(payload: CreateLawyerDto) {
     // validate company id string
@@ -274,9 +292,20 @@ export class AdminService {
       throw new BadRequestException('Company not found');
     }
 
-    // build the document payload converting company to ObjectId
+    const normalizedLoginEmail = payload.loginEmail?.toLowerCase?.()?.trim();
+    if (!normalizedLoginEmail) throw new BadRequestException('loginEmail is required');
+
+    // check email uniqueness
+    const existingUser = await this.userModel.findOne({ email: normalizedLoginEmail }).lean().exec();
+    if (existingUser) {
+      throw new BadRequestException(`A user account with email "${normalizedLoginEmail}" already exists`);
+    }
+
+    const externalId = payload.externalId?.trim() || `LAW-${Date.now().toString().slice(-6)}`;
+
+    // Step 1: Create the Lawyer profile document first (without userId)
     const docPayload: Partial<Lawyer> = {
-      externalId: payload.externalId,
+      externalId,
       name: payload.name,
       priceText: payload.priceText,
       avatarUrl: payload.avatarUrl,
@@ -290,11 +319,34 @@ export class AdminService {
       address: payload.address,
       barNumber: payload.barNumber,
       notes: payload.notes,
-      // do not set verified here unless you want admins to mark it explicitly
     };
 
-    const doc = new this.lawyerModel(docPayload);
-    return doc.save();
+    const lawyerDoc = await new this.lawyerModel(docPayload).save();
+
+    // Step 2: Hash the password and create the User account
+    const passwordHash = await bcrypt.hash(payload.password, 10);
+
+    // Parse first/last from full name for the user record
+    const nameParts = payload.name.trim().split(' ');
+    const firstName = nameParts[0] || payload.name;
+    const lastName = nameParts.slice(1).join(' ') || undefined;
+
+    const userDoc = await new this.userModel({
+      email: normalizedLoginEmail,
+      passwordHash,
+      firstName,
+      lastName: lastName || null,
+      role: 'lawyer',
+      emailVerified: true,          // admin-created accounts are pre-verified
+      acceptedTerms: true,
+      lawyerProfile: lawyerDoc._id,
+    }).save();
+
+    // Step 3: Cross-link userId back onto the Lawyer document
+    lawyerDoc.userId = (userDoc as any)._id;
+    await (lawyerDoc as any).save();
+
+    return { lawyer: lawyerDoc, user: { _id: userDoc._id, email: userDoc.email, role: userDoc.role } };
   }
 
   async setLawyerVerified(id: string, verified: boolean, actorId: string) {
@@ -311,7 +363,51 @@ export class AdminService {
     return updated;
   }
 
-  // ---------------- Settings -----------------
+  // ---------------- Case Managers -----------------
+
+  async listCaseManagers(limit = 50, page = 1) {
+    const skip = (page - 1) * limit;
+    const docs = await this.userModel.find({ role: 'case_manager' }).skip(skip).limit(limit).lean().exec();
+    const total = await this.userModel.countDocuments({ role: 'case_manager' }).exec();
+    return { total, docs };
+  }
+
+  /**
+   * Create a Case Manager user account.
+   * Account is created with role=case_manager, emailVerified=true so they can log in immediately.
+   */
+  async createCaseManager(payload: CreateCaseManagerDto) {
+    const normalizedEmail = payload.email?.toLowerCase?.()?.trim();
+    if (!normalizedEmail) throw new BadRequestException('Email is required');
+
+    const existing = await this.userModel.findOne({ email: normalizedEmail }).lean().exec();
+    if (existing) {
+      throw new BadRequestException(`A user account with email "${normalizedEmail}" already exists`);
+    }
+
+    const passwordHash = await bcrypt.hash(payload.password, 10);
+
+    const userDoc = await new this.userModel({
+      email: normalizedEmail,
+      passwordHash,
+      firstName: payload.firstName,
+      lastName: payload.lastName || null,
+      phone: payload.phone || null,
+      role: 'case_manager',
+      emailVerified: true,    // admin-created — pre-verified
+      acceptedTerms: true,
+    }).save();
+
+    return {
+      _id: userDoc._id,
+      email: userDoc.email,
+      firstName: userDoc.firstName,
+      lastName: userDoc.lastName,
+      role: userDoc.role,
+    };
+  }
+
+
 
   /** Returns the singleton site settings document, creating default values if needed. */
   async getSettings(): Promise<SettingsDocument> {

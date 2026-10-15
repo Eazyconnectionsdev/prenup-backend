@@ -17,6 +17,7 @@ import { AdminService } from './admin.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
+import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('admin')
@@ -84,6 +85,18 @@ export class AdminController {
   }
 
   // ------------------- Settings -------------------
+  @Get('settings/topbar')
+  async getTopbarSettings() {
+    const settings = await this.adminService.getSettings();
+    return {
+      topBar1Enabled: settings.topBar1Enabled ?? true,
+      topBar1Text: settings.topBar1Text ?? '',
+      topBar2Enabled: settings.topBar2Enabled ?? true,
+      topBar2Text: settings.topBar2Text ?? '',
+      topBar: settings.topBar ?? [],
+    };
+  }
+
   @Get('settings')
   async getSettings(@Req() req) {
     const user = this.ensureUser(req);
@@ -159,6 +172,13 @@ export class AdminController {
     return this.adminService.listCompanies(Number(limit) || 50, Number(page) || 1);
   }
 
+  @Get('companies/:id')
+  async getCompany(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getCompanyById(id);
+  }
+
   @Post('companies')
   async createCompany(@Req() req, @Body() body: CreateCompanyDto) {
     const user = this.ensureUser(req);
@@ -181,6 +201,13 @@ export class AdminController {
     return this.adminService.listLawyers(Number(limit) || 50, Number(page) || 1);
   }
 
+  @Get('lawyers/:id')
+  async getLawyer(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getLawyerById(id);
+  }
+
   @Post('lawyers')
   async createLawyer(@Req() req, @Body() body: CreateLawyerDto) {
     const user = this.ensureUser(req);
@@ -200,5 +227,20 @@ export class AdminController {
     const user = this.ensureUser(req);
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
     return this.adminService.archiveLawyer(id, user.id || user._id);
+  }
+
+  // ------------------- Case Managers -------------------
+  @Get('case-managers')
+  async listCaseManagers(@Req() req, @Query('page') page = '1', @Query('limit') limit = '50') {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.listCaseManagers(Number(limit) || 50, Number(page) || 1);
+  }
+
+  @Post('case-managers')
+  async createCaseManager(@Req() req, @Body() body: CreateCaseManagerDto) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.createCaseManager(body);
   }
 }

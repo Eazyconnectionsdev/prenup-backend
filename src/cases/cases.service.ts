@@ -4,6 +4,8 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  OnModuleInit,
+  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';

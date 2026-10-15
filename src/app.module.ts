@@ -15,6 +15,9 @@ import { CompaniesModule } from './cases/companies/companies.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 
 
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -33,5 +36,8 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 
 
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule { }
+
