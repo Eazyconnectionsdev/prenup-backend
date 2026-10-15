@@ -23,6 +23,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ValidateResetTokenDto } from './dto/validate-reset-token.dto';
 import { CasesService } from '../cases/cases.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -132,14 +133,34 @@ export class AuthController {
   @HttpCode(200)
   async requestReset(@Body() dto: RequestResetDto) {
     await this.authService.requestPasswordReset(dto.email);
-    return { message: 'If that email exists, a reset link has been sent' };
+    // Deliberately identical for known and unknown emails.
+    return {
+      success: true,
+      message:
+        'If an account exists for that email, a password reset link is on its way.',
+    };
+  }
+
+  // Lets the reset page tell a usable link from a stale one before the user
+  // types a new password.
+  @Post('validate-reset-token')
+  @HttpCode(200)
+  async validateResetToken(@Body() dto: ValidateResetTokenDto) {
+    const result = await this.authService.validateResetToken(
+      dto.email,
+      dto.token,
+    );
+    return { success: true, ...result };
   }
 
   @Post('reset-password')
   @HttpCode(200)
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.email, dto.token, dto.newPassword);
-    return { message: 'Password reset successful' };
+    return {
+      success: true,
+      message: 'Your password has been reset. You can now sign in.',
+    };
   }
 
 
