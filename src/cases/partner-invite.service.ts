@@ -35,7 +35,7 @@ export class PartnerInviteService {
     return crypto.createHash('sha256').update(token).digest('hex');
   }
 
-  private latest(caseId: string | Types.ObjectId) {
+  latest(caseId: string | Types.ObjectId) {
     return this.inviteModel
       .findOne({ caseId: new Types.ObjectId(String(caseId)) })
       .sort({ createdAt: -1 })

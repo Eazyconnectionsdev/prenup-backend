@@ -128,7 +128,24 @@ export class CasesController {
       );
     }
 
-    return c;
+    const doc: any = (c as any).toObject ? (c as any).toObject() : c;
+    try {
+      doc.stages = await this.casesService.getCaseStages(id);
+    } catch {
+      // stages optional fallback
+    }
+
+    return doc;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/stages')
+  async getStages(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    this.ensureUser(req);
+    return this.casesService.getCaseStages(id);
   }
 
   // ============================================================
