@@ -75,12 +75,13 @@ export enum CaseWorkflowStatus {
 
   CM_APPROVED = 'CM_APPROVED',
 
-  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
-
   PRE_LAWYER_PENDING = 'PRE_LAWYER_PENDING',
 
   PRE_LAWYER_COMPLETED = 'PRE_LAWYER_COMPLETED',
 
+  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
+
+         
   LAWYER_CLIENT_CONFIRMATION =
   'LAWYER_CLIENT_CONFIRMATION',
 
@@ -229,6 +230,76 @@ export const PreQuestionnaireSchema =
   );
 
 //
+// STAGES & REVIEW ENUMS
+//
+
+export enum PaymentStatus {
+  PENDING = 'PENDING',
+  INITIATED = 'INITIATED',
+  FAILED = 'FAILED',
+  COMPLETED = 'COMPLETED',
+  REFUNDED = 'REFUNDED',
+}
+
+export enum PartnerReviewStatus {
+  IN_PROGRESS = 'IN_PROGRESS',
+  FINAL_SUBMIT = 'FINAL_SUBMIT',
+  IN_REVIEW = 'IN_REVIEW',
+  APPROVED = 'APPROVED',
+}
+
+export enum MutualApprovalStatus {
+  PENDING = 'PENDING',
+  COMPLETED = 'COMPLETED',
+}
+
+@Schema({ _id: false })
+export class ReviewTimelineEntry {
+  @Prop({ type: String, required: true })
+  action!: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  actor?: Types.ObjectId | null;
+
+  @Prop({
+    type: String,
+    enum: ['PRIMARY', 'SECONDARY', 'SYSTEM'],
+    default: 'PRIMARY',
+  })
+  actorRole!: 'PRIMARY' | 'SECONDARY' | 'SYSTEM';
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p1Status!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p2Status!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(MutualApprovalStatus),
+    default: MutualApprovalStatus.PENDING,
+  })
+  mutualStatus!: MutualApprovalStatus;
+
+  @Prop({ type: Date, default: () => new Date() })
+  timestamp!: Date;
+
+  @Prop({ type: String, default: null })
+  notes?: string | null;
+}
+
+export const ReviewTimelineEntrySchema =
+  SchemaFactory.createForClass(ReviewTimelineEntry);
+
+//
 // APPROVAL
 //
 
@@ -245,6 +316,36 @@ export class Approval {
 
   @Prop({ type: Date, default: null })
   user2ApprovedAt!: Date | null;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p1ReviewStatus!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p2ReviewStatus!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(MutualApprovalStatus),
+    default: MutualApprovalStatus.PENDING,
+  })
+  mutualApprovalAndSnapshot!: MutualApprovalStatus;
+
+  @Prop({ type: Date, default: null })
+  mutualApprovalCompletedAt?: Date | null;
+
+  @Prop({ type: [ReviewTimelineEntrySchema], default: [] })
+  reviewTimeline!: ReviewTimelineEntry[];
+
+  @Prop({ type: Object, default: null })
+  snapshotData?: any;
 
   @Prop({ type: Types.ObjectId, default: null })
   disapprovedBy!: Types.ObjectId | null;
@@ -609,6 +710,13 @@ export class Case {
     default: false,
   })
   paymentCompleted?: boolean;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PaymentStatus),
+    default: PaymentStatus.PENDING,
+  })
+  paymentStatus!: PaymentStatus;
 
   // Chosen during onboarding (user 1 only).
   @Prop({

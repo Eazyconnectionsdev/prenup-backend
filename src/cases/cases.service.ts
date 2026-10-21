@@ -1,4 +1,4 @@
-// src/cases/cases.service.ts
+﻿// src/cases/cases.service.ts
 import {
   BadRequestException,
   Injectable,
@@ -18,6 +18,10 @@ import {
   PreQuestionnaire,
   Approval,
   CaseWorkflowStatus,
+  PaymentStatus,
+  PartnerReviewStatus,
+  MutualApprovalStatus,
+  ReviewTimelineEntry,
 } from './schemas/case.schema';
 
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
@@ -236,6 +240,7 @@ export class CasesService {
     }
 
     c.paymentCompleted = true;
+    c.paymentStatus = PaymentStatus.COMPLETED;
 
     c.workflowStatus = CaseWorkflowStatus.DRAFT;
 
@@ -648,21 +653,59 @@ export class CasesService {
     // other partner's approval is what completes the round.
     const approval = this.ensureApprovalObj(c);
 
+    let actionLabel = '';
     if (isOwner) {
       approval.user1Approved = true;
       approval.user1ApprovedAt = now;
       approval.user2Approved = false;
       approval.user2ApprovedAt = null;
+
+      approval.p1ReviewStatus = PartnerReviewStatus.FINAL_SUBMIT;
+      approval.p2ReviewStatus = PartnerReviewStatus.IN_REVIEW;
+      approval.mutualApprovalAndSnapshot = MutualApprovalStatus.PENDING;
+
+      const hasPreviousSubmit =
+        approval.reviewTimeline && approval.reviewTimeline.length > 0;
+      actionLabel = hasPreviousSubmit
+        ? 'Primary Applicant — Changes Submitted'
+        : 'Primary Applicant — Submitted';
+
+      approval.reviewTimeline.push({
+        action: actionLabel,
+        actor: new Types.ObjectId(actorId),
+        actorRole: 'PRIMARY',
+        p1Status: PartnerReviewStatus.FINAL_SUBMIT,
+        p2Status: PartnerReviewStatus.IN_REVIEW,
+        mutualStatus: MutualApprovalStatus.PENDING,
+        timestamp: now,
+      } as ReviewTimelineEntry);
     } else {
       approval.user2Approved = true;
       approval.user2ApprovedAt = now;
       approval.user1Approved = false;
       approval.user1ApprovedAt = null;
+
+      approval.p1ReviewStatus = PartnerReviewStatus.IN_REVIEW;
+      approval.p2ReviewStatus = PartnerReviewStatus.FINAL_SUBMIT;
+      approval.mutualApprovalAndSnapshot = MutualApprovalStatus.PENDING;
+
+      actionLabel = 'Secondary Applicant — Changes Submitted';
+
+      approval.reviewTimeline.push({
+        action: actionLabel,
+        actor: new Types.ObjectId(actorId),
+        actorRole: 'SECONDARY',
+        p1Status: PartnerReviewStatus.IN_REVIEW,
+        p2Status: PartnerReviewStatus.FINAL_SUBMIT,
+        mutualStatus: MutualApprovalStatus.PENDING,
+        timestamp: now,
+      } as ReviewTimelineEntry);
     }
 
     approval.disapprovedBy = null;
     approval.disapprovedAt = null;
     approval.disapprovalReason = null;
+    c.markModified('approval');
 
     await c.save();
     return c;
@@ -699,31 +742,99 @@ export class CasesService {
   if (isOwner) {
     approval.user1Approved = true;
     approval.user1ApprovedAt = now;
+    approval.p1ReviewStatus = PartnerReviewStatus.APPROVED;
+    approval.mutualApprovalAndSnapshot = MutualApprovalStatus.COMPLETED;
+    approval.mutualApprovalCompletedAt = now;
+
+    // Bug 1 fix: mirror P2 hadChanges check so Scenario A gets the correct label.
+    const p1HadChanges =
+      approval.reviewTimeline &&
+      approval.reviewTimeline.some((t: any) =>
+        t.action?.includes('Changes Submitted'),
+      );
+    const p1ApproveAction = p1HadChanges
+      ? 'Primary Applicant — Approved Updated Version'
+      : 'Primary Applicant — Approved without changes';
+
+    approval.reviewTimeline.push({
+      action: p1ApproveAction,
+      actor: new Types.ObjectId(actorId),
+      actorRole: 'PRIMARY',
+      p1Status: PartnerReviewStatus.APPROVED,
+      p2Status: approval.p2ReviewStatus || PartnerReviewStatus.FINAL_SUBMIT,
+      mutualStatus: MutualApprovalStatus.COMPLETED,
+      timestamp: now,
+    } as ReviewTimelineEntry);
   } else {
     approval.user2Approved = true;
     approval.user2ApprovedAt = now;
+    approval.p2ReviewStatus = PartnerReviewStatus.APPROVED;
+    approval.mutualApprovalAndSnapshot = MutualApprovalStatus.COMPLETED;
+    approval.mutualApprovalCompletedAt = now;
+
+    const hadChanges =
+      approval.reviewTimeline &&
+      approval.reviewTimeline.some((t: any) =>
+        t.action?.includes('Changes Submitted'),
+      );
+    const approveAction = hadChanges
+      ? 'Secondary Applicant — Approved Updated Version'
+      : 'Secondary Applicant — Approved without changes';
+
+    approval.reviewTimeline.push({
+      action: approveAction,
+      actor: new Types.ObjectId(actorId),
+      actorRole: 'SECONDARY',
+      p1Status: approval.p1ReviewStatus || PartnerReviewStatus.FINAL_SUBMIT,
+      p2Status: PartnerReviewStatus.APPROVED,
+      mutualStatus: MutualApprovalStatus.COMPLETED,
+      timestamp: now,
+    } as ReviewTimelineEntry);
   }
 
-  if (approval.user1Approved && approval.user2Approved) {
-    jointStatus.locked = true;
-    jointStatus.lockedBy = new Types.ObjectId(actorId);
-    jointStatus.lockedAt = now;
+  // Bug 2 note: this entry fires exactly once (after the per-approver entry
+  // above), so the timeline never gets a duplicate Mutual Approval entry.
+  approval.reviewTimeline.push({
+    action: 'Mutual Approval & Snapshot — Completed',
+    actor: new Types.ObjectId(actorId),
+    actorRole: isOwner ? 'PRIMARY' : 'SECONDARY',
+    p1Status: approval.p1ReviewStatus,
+    p2Status: approval.p2ReviewStatus,
+    mutualStatus: MutualApprovalStatus.COMPLETED,
+    timestamp: now,
+  } as ReviewTimelineEntry);
 
-    // Both partners have confirmed: freeze the couple-facing sections and
-    // hand the case to a case manager. Independent legal advice stays open.
-    for (const name of ['myInformation', 'partnerInformation', 'jointInformation']) {
-      const s = this.ensureSectionStatus(c, name);
-      if (!s.locked && s.submitted) {
-        s.locked = true;
-        s.lockedBy = new Types.ObjectId(actorId);
-        s.lockedAt = now;
-      }
+  // Freeze snapshot data
+  approval.snapshotData = {
+    frozenAt: now,
+    myInformation: c.myInformation,
+    partnerInformation: c.partnerInformation,
+    jointInformation: c.jointInformation,
+    caseNumber: c.caseNumber,
+    title: c.title,
+    owner: c.owner,
+    invitedUser: c.invitedUser,
+  };
+
+  jointStatus.locked = true;
+  jointStatus.lockedBy = new Types.ObjectId(actorId);
+  jointStatus.lockedAt = now;
+
+  // Both partners have confirmed: freeze the couple-facing sections and
+  // hand the case to a case manager. Independent legal advice stays open.
+  for (const name of ['myInformation', 'partnerInformation', 'jointInformation']) {
+    const s = this.ensureSectionStatus(c, name);
+    if (!s.locked && s.submitted) {
+      s.locked = true;
+      s.lockedBy = new Types.ObjectId(actorId);
+      s.lockedAt = now;
     }
-    c.markModified('status');
-
-    c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
-    movedToCaseManager = true;
   }
+  c.markModified('status');
+  c.markModified('approval');
+
+  c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
+  movedToCaseManager = true;
 
   await c.save();
 
@@ -778,10 +889,35 @@ async rejectCaseByUser(
   approval.user2Approved = false;
   approval.user2ApprovedAt = null;
 
+  if (isOwner) {
+    approval.p1ReviewStatus = PartnerReviewStatus.IN_PROGRESS;
+    approval.p2ReviewStatus = PartnerReviewStatus.IN_REVIEW;
+  } else {
+    approval.p1ReviewStatus = PartnerReviewStatus.IN_REVIEW;
+    approval.p2ReviewStatus = PartnerReviewStatus.IN_PROGRESS;
+  }
+  approval.mutualApprovalAndSnapshot = MutualApprovalStatus.PENDING;
+
   approval.disapprovedBy = new Types.ObjectId(actorId);
   approval.disapprovedAt = now;
   approval.disapprovalReason = reason || null;
 
+  const action = isOwner
+    ? 'Primary Applicant — Requested Further Changes'
+    : 'Secondary Applicant — Requested Changes';
+
+  approval.reviewTimeline.push({
+    action,
+    actor: new Types.ObjectId(actorId),
+    actorRole: isOwner ? 'PRIMARY' : 'SECONDARY',
+    p1Status: approval.p1ReviewStatus,
+    p2Status: approval.p2ReviewStatus,
+    mutualStatus: MutualApprovalStatus.PENDING,
+    timestamp: now,
+    notes: reason || null,
+  } as ReviewTimelineEntry);
+
+  c.markModified('approval');
   await c.save();
   return c;
 }
@@ -1018,8 +1154,10 @@ ${taskLines.join('\n\n')}`;
     const p2Submitted = !!(
       c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted
     );
+    // Bug 5 fix: when both partners finish the pre-questionnaire the case
+    // was already in LAWYERS_ASSIGNED; advance it to PRE_LAWYER_COMPLETED.
     if (p1Submitted && p2Submitted) {
-      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
+      c.workflowStatus = CaseWorkflowStatus.PRE_LAWYER_COMPLETED;
       await c.save();
 
       // notify both users using mailService helper (it internally resolves emails)
@@ -1099,6 +1237,12 @@ ${taskLines.join('\n\n')}`;
       user1ApprovedAt: null,
       user2Approved: false,
       user2ApprovedAt: null,
+      p1ReviewStatus: PartnerReviewStatus.IN_PROGRESS,
+      p2ReviewStatus: PartnerReviewStatus.IN_PROGRESS,
+      mutualApprovalAndSnapshot: MutualApprovalStatus.PENDING,
+      mutualApprovalCompletedAt: null,
+      reviewTimeline: [],
+      snapshotData: null,
       disapprovedBy: null,
       disapprovedAt: null,
       disapprovalReason: null,
@@ -1109,7 +1253,13 @@ ${taskLines.join('\n\n')}`;
       caseManagerApprovedAt: null,
       approvedBy: null,
     };
-    return (c as any).approval;
+    const a = (c as any).approval;
+    if (!a.p1ReviewStatus) a.p1ReviewStatus = PartnerReviewStatus.IN_PROGRESS;
+    if (!a.p2ReviewStatus) a.p2ReviewStatus = PartnerReviewStatus.IN_PROGRESS;
+    if (!a.mutualApprovalAndSnapshot)
+      a.mutualApprovalAndSnapshot = MutualApprovalStatus.PENDING;
+    if (!a.reviewTimeline) a.reviewTimeline = [];
+    return a;
   }
 
 
@@ -1571,5 +1721,406 @@ Wenup
     };
   }
 
+  async getCaseStages(caseId: string): Promise<any> {
+    const c = await this.caseModel
+      .findById(caseId)
+      .populate('owner invitedUser')
+      .exec();
 
+    if (!c) throw new NotFoundException('Case not found');
+
+    let invite: any = null;
+    try {
+      invite = await this.partnerInvites.latest(caseId);
+    } catch {
+      invite = null;
+    }
+
+    // Stage A: Applicant Draft Created
+    const stageA = {
+      id: 'A',
+      name: 'Applicant Draft Created',
+      status: 'Completed',
+      createdAt: (c as any).createdAt || null,
+    };
+
+    // ── Stage 1: Registration and Payment ──────────────────────────────────
+    // Sub-item statuses use the exact enum values from the spreadsheet.
+
+    // Invited: Pending | Sent | Accepted | Expired
+    let inviteStatus: 'Pending' | 'Sent' | 'Accepted' | 'Expired' = 'Pending';
+    if (invite) {
+      if (invite.status === 'ACCEPTED' || c.invitedUser) {
+        inviteStatus = 'Accepted';
+      } else if (invite.status === 'EXPIRED') {
+        inviteStatus = 'Expired';
+      } else {
+        inviteStatus = 'Sent';
+      }
+    } else if (c.invitedEmail || c.partnerInvited) {
+      inviteStatus = c.invitedUser ? 'Accepted' : 'Sent';
+    }
+
+    // Partner Joined: Pending | Completed
+    const partnerJoinedStatus: 'Pending' | 'Completed' =
+      Boolean(c.invitedUser) ? 'Completed' : 'Pending';
+
+    // Payment Completed: Pending | Initiated | Failed | Completed | Refunded
+    type PaymentItemStatus = 'Pending' | 'Initiated' | 'Failed' | 'Completed' | 'Refunded';
+    let paymentItemStatus: PaymentItemStatus = 'Pending';
+    if (c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED) {
+      paymentItemStatus = 'Completed';
+    } else if (c.paymentStatus === PaymentStatus.INITIATED) {
+      paymentItemStatus = 'Initiated';
+    } else if (c.paymentStatus === PaymentStatus.FAILED) {
+      paymentItemStatus = 'Failed';
+    } else if (c.paymentStatus === PaymentStatus.REFUNDED) {
+      paymentItemStatus = 'Refunded';
+    }
+
+    // Stage 1 overall: Completed only when all 3 required items are done
+    const stage1AllDone =
+      inviteStatus === 'Accepted' &&
+      partnerJoinedStatus === 'Completed' &&
+      paymentItemStatus === 'Completed';
+    const stage1AnyStarted =
+      inviteStatus !== 'Pending' ||
+      partnerJoinedStatus === 'Completed' ||
+      paymentItemStatus !== 'Pending';
+    const stage1Status: 'Pending' | 'In Progress' | 'Completed' =
+      stage1AllDone ? 'Completed' : stage1AnyStarted ? 'In Progress' : 'Pending';
+
+    const stage1 = {
+      id: '1',
+      name: 'Registration and Payment',
+      status: stage1Status,
+      items: [
+        {
+          key: 'registered',
+          label: 'Registered',
+          status: 'Completed' as const,
+          possibleStatuses: ['Completed'],
+        },
+        {
+          key: 'invited',
+          label: 'Invited',
+          status: inviteStatus,
+          possibleStatuses: ['Pending', 'Sent', 'Accepted', 'Expired'],
+        },
+        {
+          key: 'partnerJoined',
+          label: 'Partner Joined',
+          status: partnerJoinedStatus,
+          possibleStatuses: ['Pending', 'Completed'],
+        },
+        {
+          key: 'paymentCompleted',
+          label: 'Payment Completed',
+          status: paymentItemStatus,
+          possibleStatuses: ['Pending', 'Initiated', 'Failed', 'Completed', 'Refunded'],
+        },
+      ],
+    };
+
+    // ── Shared helper: derive a sub-section status from saved data + submitted flag ──
+    // Priority: if the parent section is submitted → Completed.
+    // Otherwise, check whether the sub-object has any filled keys.
+    const subSectionStatus = (
+      data: any,
+      parentSubmitted: boolean,
+    ): 'Pending' | 'In Progress' | 'Completed' => {
+      if (parentSubmitted) return 'Completed';
+      if (!data || typeof data !== 'object') return 'Pending';
+      const plain =
+        typeof (data as any).toObject === 'function'
+          ? (data as any).toObject()
+          : data;
+      const keys = Object.keys(plain);
+      if (keys.length === 0) return 'Pending';
+      const filled = keys.filter((k) => {
+        const v = plain[k];
+        if (v === null || v === undefined || v === '') return false;
+        if (Array.isArray(v)) return v.length > 0;
+        if (typeof v === 'object') return Object.keys(v).length > 0;
+        return true;
+      }).length;
+      if (filled === 0) return 'Pending';
+      if (filled >= keys.length) return 'Completed';
+      return 'In Progress';
+    };
+
+    // ── Stage 2: Application - Primary Applicant ────────────────────────────
+    // 6 personal sub-sections + 4 joint sub-sections = 10 total.
+    // The section-level "submitted" flag is the authoritative source for
+    // Completed; individual sub-section statuses use data presence + that flag.
+    const myInfo = (c.myInformation as any) || {};
+    const jointInfo = (c.jointInformation as any) || {};
+    const myInfoSubmitted = Boolean(c.status?.myInformation?.submitted);
+    const jointInfoSubmitted = Boolean(c.status?.jointInformation?.submitted);
+
+    const stage2Sections = [
+      {
+        key: 'personalInformation',
+        label: 'Personal Information',
+        status: subSectionStatus(myInfo.personalInformation, myInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'legalDeclaration',
+        label: 'Legal Declaration',
+        status: subSectionStatus(myInfo.legalDeclaration, myInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'familyAndDependents',
+        label: 'Family & Dependents',
+        status: subSectionStatus(myInfo.familyAndDependents, myInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'assets',
+        label: 'Assets',
+        status: subSectionStatus(
+          myInfo.individualAssets ?? myInfo.assets,
+          myInfoSubmitted,
+        ),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'incomeAndRevenue',
+        label: 'Income & Revenue',
+        status: subSectionStatus(myInfo.incomeAndRevenue, myInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'liabilitiesAndDebts',
+        label: 'Liabilities & Debts',
+        status: subSectionStatus(myInfo.liabilitiesAndDebts, myInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      // Joint sub-sections (filled by P1, reviewed jointly)
+      {
+        key: 'jointAssets',
+        label: 'Joint Assets',
+        status: subSectionStatus(jointInfo.jointAssets, jointInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'jointIncomeAndRevenue',
+        label: 'Joint Income & Revenue',
+        status: subSectionStatus(jointInfo.jointIncomeAndRevenue, jointInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'jointLiabilitiesAndDebts',
+        label: 'Joint Liabilities & Debts',
+        status: subSectionStatus(jointInfo.jointLiabilitiesAndDebts, jointInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'matrimonialAgreement',
+        label: 'Matrimonial Agreement & Review',
+        status: subSectionStatus(jointInfo.matrimonialAgreement, jointInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+    ];
+
+    // Stage 2 overall: Completed when myInformation section is submitted;
+    // In Progress when any sub-section has data; Pending otherwise.
+    const stage2OverallStatus: 'Pending' | 'In Progress' | 'Completed' = (() => {
+      if (myInfoSubmitted) return 'Completed';
+      if (stage2Sections.some((s) => s.status !== 'Pending')) return 'In Progress';
+      return 'Pending';
+    })();
+
+    const stage2 = {
+      id: '2',
+      name: 'Application - Primary Applicant',
+      status: stage2OverallStatus,
+      possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      submitted: myInfoSubmitted,
+      sections: stage2Sections,
+    };
+
+    // ── Stage 3: Application - Secondary Applicant ──────────────────────────
+    // 6 personal sub-sections filled by the invited partner.
+    const partnerInfo = (c.partnerInformation as any) || {};
+    const partnerInfoSubmitted = Boolean(c.status?.partnerInformation?.submitted);
+
+    const stage3Sections = [
+      {
+        key: 'personalInformation',
+        label: 'Personal Information',
+        status: subSectionStatus(partnerInfo.personalInformation, partnerInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'legalDeclaration',
+        label: 'Legal Declaration',
+        status: subSectionStatus(partnerInfo.legalDeclaration, partnerInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'familyAndDependents',
+        label: 'Family & Dependents',
+        status: subSectionStatus(partnerInfo.familyAndDependents, partnerInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'assets',
+        label: 'Assets',
+        status: subSectionStatus(
+          partnerInfo.individualAssets ?? partnerInfo.assets,
+          partnerInfoSubmitted,
+        ),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'incomeAndRevenue',
+        label: 'Income & Revenue',
+        status: subSectionStatus(partnerInfo.incomeAndRevenue, partnerInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+      {
+        key: 'liabilitiesAndDebts',
+        label: 'Liabilities & Debts',
+        status: subSectionStatus(partnerInfo.liabilitiesAndDebts, partnerInfoSubmitted),
+        possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      },
+    ];
+
+    // Stage 3 overall: same derivation as stage 2
+    const stage3OverallStatus: 'Pending' | 'In Progress' | 'Completed' = (() => {
+      if (partnerInfoSubmitted) return 'Completed';
+      if (stage3Sections.some((s) => s.status !== 'Pending')) return 'In Progress';
+      return 'Pending';
+    })();
+
+    const stage3 = {
+      id: '3',
+      name: 'Application - Secondary Applicant',
+      status: stage3OverallStatus,
+      possibleStatuses: ['Pending', 'In Progress', 'Completed'],
+      submitted: partnerInfoSubmitted,
+      sections: stage3Sections,
+    };
+
+    // Stage 4: Partner Review Stage
+    const approval = c.approval || ({} as any);
+    const p1Status =
+      approval.p1ReviewStatus ||
+      (approval.user1Approved
+        ? PartnerReviewStatus.FINAL_SUBMIT
+        : PartnerReviewStatus.IN_PROGRESS);
+    const p2Status =
+      approval.p2ReviewStatus ||
+      (approval.user2Approved
+        ? PartnerReviewStatus.APPROVED
+        : PartnerReviewStatus.IN_PROGRESS);
+    const mutualStatus =
+      approval.mutualApprovalAndSnapshot ||
+      (approval.user1Approved && approval.user2Approved
+        ? MutualApprovalStatus.COMPLETED
+        : MutualApprovalStatus.PENDING);
+    const timeline = approval.reviewTimeline || [];
+
+    // Determine Scenario & Step
+    let scenario = 'Scenario A — P2 approves without making changes';
+    let currentStep = 1;
+    let currentAction = 'Completing the package';
+
+    // Bug 3 fix: only match the explicit action string so that P2 merely
+    // approving (actorRole=SECONDARY) is not mistaken for making changes.
+    const p2MadeChanges = timeline.some(
+      (t: any) => t.action?.includes('Secondary Applicant — Changes Submitted'),
+    );
+    const p1MadeFurtherChanges = timeline.some(
+      (t: any) =>
+        t.action?.includes('Primary Applicant — Changes Submitted') ||
+        t.action?.includes('Primary Applicant — Submitted Updated Version'),
+    );
+
+    if (p1MadeFurtherChanges) {
+      scenario = 'Scenario C — P2 makes changes; P1 makes further changes';
+      // Bug 4 fix: add steps 1 & 2 so all intermediate states are reachable.
+      if (mutualStatus === MutualApprovalStatus.COMPLETED) {
+        currentStep = 5;
+        currentAction = 'P2 approves the latest version';
+      } else if (
+        p1Status === PartnerReviewStatus.FINAL_SUBMIT &&
+        p2Status === PartnerReviewStatus.IN_REVIEW
+      ) {
+        currentStep = 4;
+        currentAction = 'P1 makes further changes and submits to P2';
+      } else if (p2Status === PartnerReviewStatus.FINAL_SUBMIT && p1Status === PartnerReviewStatus.IN_REVIEW) {
+        currentStep = 3;
+        currentAction = 'P2 makes changes and submits to P1';
+      } else if (p1Status === PartnerReviewStatus.FINAL_SUBMIT) {
+        currentStep = 2;
+        currentAction = 'P1 submits to P2';
+      } else {
+        currentStep = 1;
+        currentAction = 'Completing the package';
+      }
+    } else if (p2MadeChanges) {
+      scenario = 'Scenario B — P2 makes changes; P1 accepts';
+      // Bug 4 fix: add steps 1 & 2 so every intermediate state is reachable.
+      if (mutualStatus === MutualApprovalStatus.COMPLETED) {
+        currentStep = 4;
+        currentAction = 'P1 approves the updated version';
+      } else if (p2Status === PartnerReviewStatus.FINAL_SUBMIT && p1Status === PartnerReviewStatus.IN_REVIEW) {
+        currentStep = 3;
+        currentAction = 'P2 makes changes and submits to P1';
+      } else if (p1Status === PartnerReviewStatus.FINAL_SUBMIT) {
+        currentStep = 2;
+        currentAction = 'P1 submits to P2';
+      } else {
+        currentStep = 1;
+        currentAction = 'Completing the package';
+      }
+    } else {
+      scenario = 'Scenario A — P2 approves without making changes';
+      if (mutualStatus === MutualApprovalStatus.COMPLETED) {
+        currentStep = 3;
+        currentAction = 'P2 approves without changes';
+      } else if (p1Status === PartnerReviewStatus.FINAL_SUBMIT) {
+        currentStep = 2;
+        currentAction = 'P1 submits to P2';
+      } else {
+        currentStep = 1;
+        currentAction = 'Completing the package';
+      }
+    }
+
+    const stage4 = {
+      id: '4',
+      name: 'Partner Review Stage',
+      status:
+        mutualStatus === MutualApprovalStatus.COMPLETED
+          ? 'Completed'
+          : currentStep > 1
+            ? 'In Progress'
+            : 'Pending',
+      scenario,
+      currentStep,
+      action: currentAction,
+      p1Status,
+      p2Status,
+      mutualApprovalAndSnapshot: mutualStatus,
+      timeline,
+      locked: Boolean(c.status?.jointInformation?.locked),
+    };
+
+    return {
+      caseId: c._id,
+      caseNumber: c.caseNumber,
+      title: c.title,
+      workflowStatus: c.workflowStatus,
+      stageA,
+      stage1,
+      stage2,
+      stage3,
+      stage4,
+    };
+  }
 }
