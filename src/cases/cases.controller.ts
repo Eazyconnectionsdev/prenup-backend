@@ -432,6 +432,34 @@ export class CasesController {
   }
 
   // ============================================================
+  // ASSIGN CASE MANAGER
+  // POST /cases/:id/assign-case-manager
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/assign-case-manager')
+  async assignCaseManager(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body('managerId') managerId: string,
+  ) {
+    const user = this.ensureUser(req);
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    if (!isPrivileged) {
+      throw new ForbiddenException(
+        'Only admins or case managers may assign cases',
+      );
+    }
+
+    return this.casesService.assignCaseManager(
+      id,
+      managerId,
+      user.id ?? user._id,
+    );
+  }
+
+  // ============================================================
   // APPROVE CASE
   // POST /cases/:id/approve
   // ============================================================

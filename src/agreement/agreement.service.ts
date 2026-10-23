@@ -306,8 +306,9 @@ export class AgreementService {
     caseId: string,
     actorId: string,
   ): Promise<{ initialized: boolean; created: boolean }> {
-    const { initialized } = await this.getLawyerStageReadiness(caseId);
+    const { initialized, canInitialize } = await this.getLawyerStageReadiness(caseId);
     if (initialized) return { initialized: true, created: false };
+    if (!canInitialize) return { initialized: false, created: false };
     await this.initializeLawyerStage(caseId, actorId);
     return { initialized: true, created: true };
   }

@@ -80,6 +80,20 @@ export class User {
   @Prop({ type: Boolean, default: false })
   paymentDone?: boolean;
 
+  @Prop({
+    type: String,
+    enum: ['England', 'Wales', 'Scotland'],
+    default: 'England',
+  })
+  jurisdiction?: string;
+
+  @Prop({
+    type: String,
+    enum: ['England', 'Wales', 'Scotland'],
+    default: 'England',
+  })
+  primaryJurisdiction?: string;
+
   // ── Location tracking ──────────────────────────────────────────────────────
 
   /** Raw IP captured at registration time */

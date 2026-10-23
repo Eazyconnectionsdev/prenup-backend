@@ -233,7 +233,7 @@ export class AdminController {
   @Get('case-managers')
   async listCaseManagers(@Req() req, @Query('page') page = '1', @Query('limit') limit = '50') {
     const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    if (!this.isAdmin(user) && user?.role !== 'case_manager') throw new BadRequestException('Admin or Case Manager only');
     return this.adminService.listCaseManagers(Number(limit) || 50, Number(page) || 1);
   }
 
