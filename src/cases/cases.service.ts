@@ -1,4 +1,4 @@
-﻿// src/cases/cases.service.ts
+// src/cases/cases.service.ts
 import {
   BadRequestException,
   Injectable,
@@ -282,7 +282,25 @@ export class CasesService {
     c.invitedUser = new Types.ObjectId(userId);
     c.inviteToken = null;
     c.inviteTokenExpires = null;
-    return c.save();
+    const saved = await c.save();
+
+    // Notify primary applicant that partner has joined
+    try {
+      const populated = await this.caseModel.findById(caseId).populate('owner invitedUser').lean().exec();
+      const ownerEmail = (populated?.owner as any)?.email;
+      const ownerName = (populated?.owner as any)?.firstName || 'there';
+      const partnerName = (populated?.invitedUser as any)?.firstName || 'Your partner';
+      const appUrl = this.config.get('APP_SERVER_URL') || this.config.get('APP_BASE_URL') || '';
+      const dashboardUrl = `${appUrl}/dashboard`;
+
+      if (ownerEmail) {
+        await this.mailService.sendPartnerJoinedNotification(ownerEmail, ownerName, partnerName, dashboardUrl);
+      }
+    } catch (err) {
+      console.error('Failed to send partner joined notification', err);
+    }
+
+    return saved;
   }
 
   // Onboarding belongs to the case owner (user 1) only; the invited partner
@@ -708,6 +726,35 @@ export class CasesService {
     c.markModified('approval');
 
     await c.save();
+
+    // Trigger Handshake review emails
+    try {
+      const populated = await this.caseModel.findById(c._id).populate('owner invitedUser').lean().exec();
+      const appUrl = this.config.get('APP_SERVER_URL') || this.config.get('APP_BASE_URL') || '';
+      const caseIdDisplay = (c as any).caseNumber || c._id.toString();
+      const reviewUrl = `${appUrl}/dashboard/review-approval`;
+      const caseUrl = `${appUrl}/dashboard`;
+
+      const submitter = isOwner ? populated?.owner : populated?.invitedUser;
+      const reviewer = isOwner ? populated?.invitedUser : populated?.owner;
+
+      const submitterName = (submitter as any)?.firstName || 'Your Partner';
+      const reviewerName = (reviewer as any)?.firstName || 'there';
+      const reviewerEmail = (reviewer as any)?.email;
+      const submitterEmail = (submitter as any)?.email;
+
+      // 1. Notify Reviewer that forms are ready for review & approval
+      if (reviewerEmail) {
+        await this.mailService.sendHandshakeReviewRequest(reviewerEmail, reviewerName, submitterName, caseIdDisplay, reviewUrl);
+      }
+      // 2. Notify Submitter that forms are now pending partner review
+      if (submitterEmail) {
+        await this.mailService.sendSubmissionPendingPartner(submitterEmail, submitterName, reviewerName, caseIdDisplay, caseUrl);
+      }
+    } catch (err) {
+      console.error('Failed to send handshake review emails', err);
+    }
+
     return c;
   }
 
@@ -840,9 +887,10 @@ export class CasesService {
 
   if (movedToCaseManager) {
     try {
+      await this.mailService.sendMutualSubmitCompleted(c);
       await this.notifyCaseManagersOfNewCmCase(c);
     } catch (err) {
-      console.error(`Failed to notify case managers for case ${c._id}`, err);
+      console.error(`Failed to notify case managers and applicants for case ${c._id}`, err);
     }
   }
 
@@ -919,6 +967,28 @@ async rejectCaseByUser(
 
   c.markModified('approval');
   await c.save();
+
+  // Notify other partner that updates are requested
+  try {
+    const populated = await this.caseModel.findById(c._id).populate('owner invitedUser').lean().exec();
+    const appUrl = this.config.get('APP_SERVER_URL') || this.config.get('APP_BASE_URL') || '';
+    const caseIdDisplay = (c as any).caseNumber || c._id.toString();
+    const editUrl = `${appUrl}/dashboard/joint-liabilities-debts`;
+
+    const rejector = isOwner ? populated?.owner : populated?.invitedUser;
+    const recipient = isOwner ? populated?.invitedUser : populated?.owner;
+
+    const rejectorName = (rejector as any)?.firstName || 'Your Partner';
+    const recipientName = (recipient as any)?.firstName || 'there';
+    const recipientEmail = (recipient as any)?.email;
+
+    if (recipientEmail) {
+      await this.mailService.sendPartnerChangesRequested(recipientEmail, recipientName, rejectorName, caseIdDisplay, reason, editUrl);
+    }
+  } catch (err) {
+    console.error('Failed to send partner changes requested email', err);
+  }
+
   return c;
 }
 
@@ -1341,7 +1411,7 @@ Please expect contact from them shortly.
 
 
 Regards,
-Wenup
+Lets Prenup
 `;
     if (
       uniqueRecipients.length > 0 &&
@@ -1529,7 +1599,7 @@ Your case ${c.caseNumber ?? c._id} has been moved to 'Paid' by the Case Manager.
 Please login to the platform and edit your pre-lawyer questionnaire and required steps.
 
 Regards,
-Wenup
+Lets Prenup
 `;
     if (
       uniqueRecipients.length > 0 &&

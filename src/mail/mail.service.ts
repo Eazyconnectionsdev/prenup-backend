@@ -6,91 +6,27 @@ import AWS from 'aws-sdk';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import * as fs from 'fs';
+import * as path from 'path';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { getDisplayCaseId } from '../utils/case-number.util';
+import { buildLetsPrenupEmailHtml, EmailLayoutOptions } from './templates/email-builder';
+import {
+  buildPartnerInviteEmail,
+  buildPartnerJoinedEmail,
+  buildPartnerReminderEmail,
+  buildHandshakeReviewRequestEmail,
+  buildSubmissionPendingPartnerEmail,
+  buildPartnerChangesRequestedEmail,
+  buildMutualSubmitCompletedEmail,
+  buildCaseManagerAlertEmail,
+} from './templates/partner-workflow.templates';
 
 // ---------------------------------------------------------------------------
-// Shared HTML email layout – matches the brand design (purple, centered card)
+// Shared HTML email layout – matches Lets Prenup brand design
 // ---------------------------------------------------------------------------
-function buildEmailHtml(opts: {
-  eyebrow?: string;      // small uppercase label above the heading
-  heading: string;       // large bold heading
-  icon?: string;         // emoji displayed below the heading
-  body: string;          // main body copy (may contain safe HTML like <strong>)
-  ctaLabel?: string;     // button text
-  ctaUrl?: string;       // button href
-  footerNote?: string;   // optional small footnote
-}): string {
-  const { eyebrow, heading, icon, body, ctaLabel, ctaUrl, footerNote } = opts;
-  const BRAND = '#6C47FF';
-  const BRAND_DARK = '#5535e0';
-
-  const eyebrowHtml = eyebrow
-    ? `<p style="margin:0 0 12px;font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:${BRAND};">${eyebrow}</p>`
-    : '';
-
-  const iconHtml = icon
-    ? `<p style="margin:20px 0 16px;font-size:48px;line-height:1;">${icon}</p>`
-    : '';
-
-  const ctaHtml = ctaLabel && ctaUrl
-    ? `<div style="margin:28px 0 0;">
-        <a href="${ctaUrl}"
-           style="display:inline-block;padding:14px 36px;background:${BRAND};color:#fff;font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;text-decoration:none;border-radius:6px;">
-          ${ctaLabel}
-        </a>
-       </div>`
-    : '';
-
-  const footerHtml = footerNote
-    ? `<p style="margin:24px 0 0;font-size:12px;color:#999;">${footerNote}</p>`
-    : '';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>${heading}</title>
-</head>
-<body style="margin:0;padding:0;background:#f4f4f7;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f7;padding:40px 16px;">
-    <tr>
-      <td align="center">
-        <!-- Card -->
-        <table width="100%" cellpadding="0" cellspacing="0" border="0"
-               style="max-width:560px;background:#ffffff;border-radius:12px;padding:48px 40px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.07);">
-          <tr>
-            <td>
-              <!-- Eyebrow -->
-              ${eyebrowHtml}
-              <!-- Heading -->
-              <h1 style="margin:0;font-size:32px;font-weight:800;color:#111827;line-height:1.2;">${heading}</h1>
-              <!-- Icon -->
-              ${iconHtml}
-              <!-- Body -->
-              <p style="margin:16px 0 0;font-size:15px;color:#4b5563;line-height:1.7;">${body}</p>
-              <!-- CTA -->
-              ${ctaHtml}
-              <!-- Footer note -->
-              ${footerHtml}
-            </td>
-          </tr>
-        </table>
-
-        <!-- Bottom brand bar -->
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;margin-top:20px;">
-          <tr>
-            <td align="center" style="font-size:12px;color:#9ca3af;padding:0 0 20px;">
-              &copy; ${new Date().getFullYear()} Wenup &bull; All rights reserved
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
+function buildEmailHtml(opts: EmailLayoutOptions): string {
+  return buildLetsPrenupEmailHtml(opts);
 }
 
 @Injectable()
@@ -135,7 +71,31 @@ export class MailService implements OnModuleInit {
     if (!this.fromAddress) throw new Error('Mail from address not configured');
     if (!to || typeof to !== 'string') throw new Error('Invalid recipient');
 
-    const mailOptions: any = { from: this.fromAddress, to, subject, text, html, replyTo: replyTo || this.fromAddress };
+    const logoCandidates = [
+      path.join(__dirname, 'assets/logo-heart.png'),
+      path.join(__dirname, '../mail/assets/logo-heart.png'),
+      path.join(process.cwd(), 'src/mail/assets/logo-heart.png'),
+      path.join(process.cwd(), 'public/images/logo-heart.png'),
+    ];
+    const logoFile = logoCandidates.find((p) => fs.existsSync(p));
+    const attachments: any[] = [];
+    if (logoFile) {
+      attachments.push({
+        filename: 'logo-heart.png',
+        path: logoFile,
+        cid: 'company-logo@letsprenup',
+      });
+    }
+
+    const mailOptions: any = {
+      from: this.fromAddress,
+      to,
+      subject,
+      text,
+      html,
+      replyTo: replyTo || this.fromAddress,
+      attachments,
+    };
     try {
       const info = await (this.transporter as any).sendMail(mailOptions);
       this.logger.log(`Email sent to=${to} subject=${subject} id=${(info as any)?.messageId ?? 'n/a'}`);
@@ -182,26 +142,114 @@ export class MailService implements OnModuleInit {
     return fallback ?? null;
   }
 
-  async sendInvite(to: string, inviteUrl: string) {
-    const subject = 'You have been invited to Wenup';
-    const text = `You have been invited to join Wenup. Accept your invitation here: ${inviteUrl}`;
-    const html = buildEmailHtml({
-      eyebrow: 'You have been invited',
-      heading: 'Join Wenup Today!',
-      icon: '🎉',
-      body: `You've been invited to collaborate on Wenup — the smarter way to manage your prenuptial agreement.<br/><br/>Click the button below to accept your invitation and get started.`,
-      ctaLabel: 'Accept Invitation',
-      ctaUrl: inviteUrl,
-      footerNote: `If you did not expect this invitation, you can safely ignore this email.`,
+  async sendInvite(to: string, inviteUrl: string, opts?: { inviterName?: string; personalMessage?: string; targetWeddingDate?: string }) {
+    const inviterName = opts?.inviterName || 'Your Partner';
+    const { subject, text, html } = buildPartnerInviteEmail({
+      inviterName,
+      inviteUrl,
+      personalMessage: opts?.personalMessage,
+      targetWeddingDate: opts?.targetWeddingDate,
     });
     return this.sendRaw({ to, subject, text, html });
   }
 
+  async sendPartnerInvite(to: string, inviteUrl: string, opts?: { inviterName?: string; personalMessage?: string; targetWeddingDate?: string }) {
+    return this.sendInvite(to, inviteUrl, opts);
+  }
+
+  async sendPartnerJoinedNotification(to: string, ownerName: string, partnerName: string, dashboardUrl: string) {
+    const { subject, text, html } = buildPartnerJoinedEmail({
+      ownerName: ownerName || 'there',
+      partnerName: partnerName || 'Your partner',
+      dashboardUrl,
+    });
+    return this.sendRaw({ to, subject, text, html });
+  }
+
+  async sendPartnerReminder(to: string, inviterName: string, partnerName: string, continueUrl: string) {
+    const { subject, text, html } = buildPartnerReminderEmail({
+      inviterName: inviterName || 'Your Partner',
+      partnerName: partnerName || 'there',
+      continueUrl,
+    });
+    return this.sendRaw({ to, subject, text, html });
+  }
+
+  async sendHandshakeReviewRequest(to: string, recipientName: string, submitterName: string, caseId: string, reviewUrl: string) {
+    const { subject, text, html } = buildHandshakeReviewRequestEmail({
+      recipientName: recipientName || 'there',
+      submitterName: submitterName || 'Your Partner',
+      caseId: caseId || 'N/A',
+      reviewUrl,
+    });
+    return this.sendRaw({ to, subject, text, html });
+  }
+
+  async sendSubmissionPendingPartner(to: string, submitterName: string, partnerName: string, caseId: string, caseUrl: string) {
+    const { subject, text, html } = buildSubmissionPendingPartnerEmail({
+      submitterName: submitterName || 'there',
+      partnerName: partnerName || 'Your Partner',
+      caseId: caseId || 'N/A',
+      caseUrl,
+    });
+    return this.sendRaw({ to, subject, text, html });
+  }
+
+  async sendPartnerChangesRequested(to: string, recipientName: string, partnerName: string, caseId: string, reason: string, editUrl: string) {
+    const { subject, text, html } = buildPartnerChangesRequestedEmail({
+      recipientName: recipientName || 'there',
+      partnerName: partnerName || 'Your Partner',
+      caseId: caseId || 'N/A',
+      reason: reason || 'Please review and adjust your entries.',
+      editUrl,
+    });
+    return this.sendRaw({ to, subject, text, html });
+  }
+
+  /**
+   * MUTUAL EMAIL: Sent to BOTH User 1 and User 2 when Handshake review is approved!
+   */
+  async sendMutualSubmitCompleted(caseDoc: any, draftAgreementUrl?: string) {
+    if (!caseDoc) return;
+    const caseId = getDisplayCaseId(caseDoc);
+    const appUrl = this.config.get('APP_SERVER_URL') || this.config.get('APP_BASE_URL') || '';
+    const rawId = caseDoc._id ? String(caseDoc._id) : caseDoc.id ? String(caseDoc.id) : null;
+    const url = draftAgreementUrl || (rawId ? `${appUrl}/cases/${rawId}` : appUrl);
+
+    const ownerEmail = await this.resolveEmail(caseDoc.owner);
+    const invitedEmail = await this.resolveEmail(caseDoc.invitedUser, caseDoc.invitedEmail);
+
+    const ownerName = (caseDoc.owner as any)?.firstName || 'Applicant 1';
+    const invitedName = (caseDoc.invitedUser as any)?.firstName || (caseDoc.partnerInviteDetails as any)?.firstName || 'Applicant 2';
+
+    // 1. Send to Owner
+    if (ownerEmail) {
+      const email1 = buildMutualSubmitCompletedEmail({
+        userName: ownerName,
+        partnerName: invitedName,
+        caseId,
+        draftAgreementUrl: url,
+      });
+      await this.sendRaw({ to: ownerEmail, subject: email1.subject, text: email1.text, html: email1.html }).catch(() => null);
+    }
+
+    // 2. Send to Invited Partner
+    if (invitedEmail) {
+      const email2 = buildMutualSubmitCompletedEmail({
+        userName: invitedName,
+        partnerName: ownerName,
+        caseId,
+        draftAgreementUrl: url,
+      });
+      await this.sendRaw({ to: invitedEmail, subject: email2.subject, text: email2.text, html: email2.html }).catch(() => null);
+    }
+  }
+
   async sendInviteCredentials(to: string, password: string, caseId?: string) {
-    const subject = 'Your Wenup Account — Sign-In Details';
-    const text = `You were invited to Wenup.\nEmail: ${to}\nPassword: ${password}\n\nWe recommend changing your password after sign-in.${caseId ? `\n\nCase ID: ${caseId}` : ''}`;
+    const subject = 'Your Lets Prenup Account — Sign-In Details';
+    const text = `You were invited to Lets Prenup.\nEmail: ${to}\nPassword: ${password}\n\nWe recommend changing your password after sign-in.${caseId ? `\n\nCase ID: ${caseId}` : ''}`;
     const html = buildEmailHtml({
-      eyebrow: 'Welcome to Wenup',
+      eyebrow: 'Welcome to Lets Prenup',
       heading: 'Your Account Is Ready!',
       icon: '🔐',
       body: `Here are your sign-in credentials:<br/><br/>
@@ -220,7 +268,7 @@ export class MailService implements OnModuleInit {
     const expiry = opts?.expiresAt
       ? `This code expires at ${opts.expiresAt.toLocaleString()}.`
       : 'This code expires shortly.';
-    const subject = 'Your Wenup Verification Code';
+    const subject = 'Your Lets Prenup Verification Code';
     const text = `Your verification code: ${otp}\n${expiry}`;
     const html = buildEmailHtml({
       eyebrow: 'Email Verification',
@@ -237,13 +285,13 @@ export class MailService implements OnModuleInit {
     const validity = hours
       ? `This link is valid for ${hours} hour${hours === 1 ? '' : 's'} and can only be used once.`
       : 'This link is valid for a limited time and can only be used once.';
-    const subject = 'Reset Your Wenup Password';
+    const subject = 'Reset Your Lets Prenup Password';
     const text = `We received a request to reset your password.\nClick the link to proceed: ${resetUrl}\n\n${validity}\n\nIf you did not request this, please ignore this email.`;
     const html = buildEmailHtml({
       eyebrow: 'Password Reset',
       heading: 'Reset Your Password',
       icon: '🔑',
-      body: `We received a request to reset the password for your Wenup account.<br/><br/>Click the button below to choose a new password.<br/><br/>${validity}`,
+      body: `We received a request to reset the password for your Lets Prenup account.<br/><br/>Click the button below to choose a new password.<br/><br/>${validity}`,
       ctaLabel: 'Reset Password',
       ctaUrl: resetUrl,
       footerNote: 'If you did not request a password reset, you can safely ignore this email and your password will stay the same.',
@@ -252,13 +300,13 @@ export class MailService implements OnModuleInit {
   }
 
   async sendPasswordChanged(email: string) {
-    const subject = 'Your Wenup Password Was Changed';
-    const text = `Your Wenup password was just changed.\n\nIf this wasn't you, please reset your password immediately and contact support.`;
+    const subject = 'Your Lets Prenup Password Was Changed';
+    const text = `Your Lets Prenup password was just changed.\n\nIf this wasn't you, please reset your password immediately and contact support.`;
     const html = buildEmailHtml({
       eyebrow: 'Security Alert',
       heading: 'Your Password Was Changed',
       icon: '🔒',
-      body: `The password for your Wenup account (<strong>${email}</strong>) was just changed.<br/><br/>You can now sign in with your new password.`,
+      body: `The password for your Lets Prenup account (<strong>${email}</strong>) was just changed.<br/><br/>You can now sign in with your new password.`,
       footerNote: `If you did not make this change, please reset your password immediately and contact support.`,
     });
     return this.sendRaw({ to: email, subject, text, html });
@@ -346,13 +394,13 @@ export class MailService implements OnModuleInit {
     const adminRecipients = cms;
 
     const userSubject = `Agreement Submitted — Case ${caseId}`;
-    const userText = `Hi,\n\nThank you for submitting your responses to the Wenup questionnaire.\n\nA draft of your nuptial agreement has been generated and will be shared shortly.\n\nYour case manager will contact you within 1–2 business days.\n\nRegards,\nWenup`;
+    const userText = `Hi,\n\nThank you for submitting your responses to the Lets Prenup questionnaire.\n\nA draft of your prenuptial agreement has been generated and will be shared shortly.\n\nYour case manager will contact you within 1–2 business days.\n\nRegards,\nLets Prenup`;
     const userHtml = buildEmailHtml({
       eyebrow: 'Submission Confirmed',
       heading: 'Agreement Submitted!',
       icon: '📝',
-      body: `Thank you for submitting your responses to the Wenup questionnaire.<br/><br/>
-             A draft of your nuptial agreement has been generated and will be shared with you shortly.<br/><br/>
+      body: `Thank you for submitting your responses to the Lets Prenup questionnaire.<br/><br/>
+             A draft of your prenuptial agreement has been generated and will be shared with you shortly.<br/><br/>
              Your case manager will reach out to you within <strong>1–2 business days</strong>.`,
       footerNote: 'If you have any questions, please contact your case manager.',
     });
@@ -420,7 +468,7 @@ export class MailService implements OnModuleInit {
   async sendLawyerIntro(lawyerEmail: string, caseDoc: any, clientMessage?: string) {
     if (!lawyerEmail) return;
     const caseId = getDisplayCaseId(caseDoc);
-    const subject = `New Client Introduction — Case ${caseId} via Wenup`;
+    const subject = `New Client Introduction — Case ${caseId} via Lets Prenup`;
     const clientInfo = caseDoc?.owner?.email ? caseDoc.owner.email : (caseDoc?.invitedEmail ?? 'N/A');
     const text = `You have been selected as the lawyer for case ${caseId}.\nClient: ${clientInfo}\n\nMessage: ${clientMessage || '(no message)'}`;
     const html = buildEmailHtml({
@@ -450,7 +498,7 @@ export class MailService implements OnModuleInit {
     if (owner) {
       await this.sendRaw({
         to: owner,
-        subject: 'Your Lawyer Has Been Assigned — Wenup',
+        subject: 'Your Lawyer Has Been Assigned — Lets Prenup',
         text: `Your lawyer has been assigned.\n\nLawyer: ${p1Lawyer.name}\nFee: ${p1Lawyer.priceText}\n\nYour lawyer will contact you shortly.`,
         html: buildEmailHtml({
           eyebrow: 'Lawyer Assigned',
@@ -468,7 +516,7 @@ export class MailService implements OnModuleInit {
     if (invited) {
       await this.sendRaw({
         to: invited,
-        subject: 'Your Lawyer Has Been Assigned — Wenup',
+        subject: 'Your Lawyer Has Been Assigned — Lets Prenup',
         text: `Your lawyer has been assigned.\n\nLawyer: ${p2Lawyer.name}\nFee: ${p2Lawyer.priceText}\n\nYour lawyer will contact you shortly.`,
         html: buildEmailHtml({
           eyebrow: 'Lawyer Assigned',
@@ -540,7 +588,7 @@ export class MailService implements OnModuleInit {
       body: `Your case has been reviewed and <strong>approved</strong> by the Case Manager.<br/><br/>
              The review process has been completed successfully.<br/><br/>
              Your case will now proceed to the next stage of the legal review process. We will keep you updated on any further steps.`,
-      footerNote: 'Thank you for choosing Wenup for your prenuptial agreement.',
+      footerNote: 'Thank you for choosing Lets Prenup for your prenuptial agreement.',
     });
 
     await Promise.all(
