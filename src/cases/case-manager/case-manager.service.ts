@@ -692,16 +692,6 @@ export class CaseManagerService {
       );
     }
 
-    // Assigned lawyers work on the lawyer-stage document, which is created
-    // from the CM-approved version — refuse before assigning if it can't be
-    const readiness =
-      await this.agreementService.getLawyerStageReadiness(caseId);
-
-    if (!readiness.canInitialize) {
-      throw new BadRequestException(
-        'Approve the case and generate the CM agreement before assigning lawyers',
-      );
-    }
 
     caseDoc.assignedLawyerP1 =
       new Types.ObjectId(dto.p1LawyerId);

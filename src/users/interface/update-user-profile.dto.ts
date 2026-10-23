@@ -45,4 +45,12 @@ export class UpdateUserProfileDto {
   @IsOptional()
   @IsBoolean()
   marketingConsent?: boolean;
+
+  @IsOptional()
+  @IsString()
+  jurisdiction?: string;
+
+  @IsOptional()
+  @IsString()
+  primaryJurisdiction?: string;
 }
