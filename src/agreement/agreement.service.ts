@@ -1,7 +1,6 @@
 import { createHash } from 'crypto';
 
 import * as mammoth from 'mammoth';
-import puppeteer from 'puppeteer';
 import { THEME } from './agreement-document.builder';
 
 import { Model, Types } from 'mongoose';
@@ -92,7 +91,7 @@ export class AgreementService {
     private lockModel: Model<AgreementLockDocument>,
     private s3Service: S3Service,
     private eventEmitter: EventEmitter2,
-  ) {}
+  ) { }
 
   // User agreement Generation code
 
@@ -696,46 +695,46 @@ export class AgreementService {
     };
   }
 
-async compareVersions(
-  caseId: string,
-  actorId: string,
-  versionAId: string,
-  versionBId: string,
-): Promise<DiffParagraph[]> {
-  const { c } = await this.validateCaseAndActor(caseId, actorId);
+  async compareVersions(
+    caseId: string,
+    actorId: string,
+    versionAId: string,
+    versionBId: string,
+  ): Promise<DiffParagraph[]> {
+    const { c } = await this.validateCaseAndActor(caseId, actorId);
 
-  if (versionAId === versionBId) {
-    throw new BadRequestException('Cannot compare a version with itself');
+    if (versionAId === versionBId) {
+      throw new BadRequestException('Cannot compare a version with itself');
+    }
+
+    const [versionA, versionB] = await Promise.all([
+      this.documentVersion.findOne({ _id: versionAId, caseId: c._id }).exec(),
+      this.documentVersion.findOne({ _id: versionBId, caseId: c._id }).exec(),
+    ]);
+
+    if (!versionA || !versionB) {
+      throw new NotFoundException('One or both versions not found for this case');
+    }
+
+    const isAOlder =
+      versionA.majorVersion !== versionB.majorVersion
+        ? versionA.majorVersion < versionB.majorVersion
+        : versionA.minorVersion <= versionB.minorVersion;
+
+    const [older, newer] = isAOlder ? [versionA, versionB] : [versionB, versionA];
+
+    const [olderBuffer, newerBuffer] = await Promise.all([
+      this.s3Service.getFromBucket(older.s3Key),
+      this.s3Service.getFromBucket(newer.s3Key),
+    ]);
+
+    const [olderParagraphs, newerParagraphs] = await Promise.all([
+      extractParagraphs(olderBuffer),
+      extractParagraphs(newerBuffer),
+    ]);
+
+    return diffParagraphs(olderParagraphs, newerParagraphs);
   }
-
-  const [versionA, versionB] = await Promise.all([
-    this.documentVersion.findOne({ _id: versionAId, caseId: c._id }).exec(),
-    this.documentVersion.findOne({ _id: versionBId, caseId: c._id }).exec(),
-  ]);
-
-  if (!versionA || !versionB) {
-    throw new NotFoundException('One or both versions not found for this case');
-  }
-
-  const isAOlder =
-    versionA.majorVersion !== versionB.majorVersion
-      ? versionA.majorVersion < versionB.majorVersion
-      : versionA.minorVersion <= versionB.minorVersion;
-
-  const [older, newer] = isAOlder ? [versionA, versionB] : [versionB, versionA];
-
-  const [olderBuffer, newerBuffer] = await Promise.all([
-    this.s3Service.getFromBucket(older.s3Key),
-    this.s3Service.getFromBucket(newer.s3Key),
-  ]);
-
-  const [olderParagraphs, newerParagraphs] = await Promise.all([
-    extractParagraphs(olderBuffer),
-    extractParagraphs(newerBuffer),
-  ]);
-
-  return diffParagraphs(olderParagraphs, newerParagraphs);
-}
 
   // private functions
 
@@ -827,7 +826,9 @@ async compareVersions(
   </html>
 `;
 
-    const browser = await puppeteer.launch({ headless: true });
+    const puppeteerModule: any = await import('puppeteer');
+    const puppeteer = puppeteerModule.default || puppeteerModule;
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
     try {
       const page = await browser.newPage();
       await page.setContent(styledHtml, { waitUntil: 'load' });
@@ -866,73 +867,73 @@ async compareVersions(
   }
 
 
-private async validateCaseAndActor(
-  caseId: string,
-  actorId: string,
-  allowedRoles?: CaseActorRole[],
-): Promise<{ c: CaseDocument; actorObjId: Types.ObjectId; role: CaseActorRole }> {
-  if (!Types.ObjectId.isValid(caseId)) {
-    throw new BadRequestException('Invalid case id');
-  }
-
-  const c = await this.caseModel.findById(caseId).exec();
-  if (!c) throw new NotFoundException('Case not found');
-
-  if (!Types.ObjectId.isValid(actorId)) {
-    throw new BadRequestException('Invalid actor id');
-  }
-
-  const actorObjId = new Types.ObjectId(actorId);
-  const actorIdStr = actorObjId.toString();
-
-  const actorUser = await this.userModel.findById(actorObjId).exec();
-  if (!actorUser) {
-    throw new ForbiddenException('Actor not found');
-  }
-
-  let matchedRole: CaseActorRole | null = null;
-
-  switch (actorUser.role) {
-    case 'superadmin':
-    case 'admin':
-      matchedRole = 'ADMIN';
-      break;
-
-    case 'case_manager':
-      matchedRole = 'CASE_MANAGER';
-      break;
-
-    case 'lawyer': {
-      const p1LawyerId = (c as any).assignedLawyerP1?.toString();
-      const p2LawyerId = (c as any).assignedLawyerP2?.toString();
-      const myIds = [actorIdStr, actorUser.lawyerProfile?.toString()].filter(Boolean);
-
-      if (p1LawyerId && myIds.includes(p1LawyerId)) {
-        matchedRole = 'LAWYER_P1';
-      } else if (p2LawyerId && myIds.includes(p2LawyerId)) {
-        matchedRole = 'LAWYER_P2';
-      }
-      break;
+  private async validateCaseAndActor(
+    caseId: string,
+    actorId: string,
+    allowedRoles?: CaseActorRole[],
+  ): Promise<{ c: CaseDocument; actorObjId: Types.ObjectId; role: CaseActorRole }> {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
     }
 
-    case 'end_user': {
-      if (c.owner?.toString() === actorIdStr) {
-        matchedRole = 'OWNER';
-      } else if (c.invitedUser?.toString() === actorIdStr) {
-        matchedRole = 'INVITED_USER';
-      }
-      break;
+    const c = await this.caseModel.findById(caseId).exec();
+    if (!c) throw new NotFoundException('Case not found');
+
+    if (!Types.ObjectId.isValid(actorId)) {
+      throw new BadRequestException('Invalid actor id');
     }
-  }
 
-  if (!matchedRole) {
-    throw new ForbiddenException('Actor not part of this case');
-  }
+    const actorObjId = new Types.ObjectId(actorId);
+    const actorIdStr = actorObjId.toString();
 
-  if (allowedRoles && !allowedRoles.includes(matchedRole)) {
-    throw new ForbiddenException(`Actor role ${matchedRole} is not permitted for this action`);
-  }
+    const actorUser = await this.userModel.findById(actorObjId).exec();
+    if (!actorUser) {
+      throw new ForbiddenException('Actor not found');
+    }
 
-  return { c, actorObjId, role: matchedRole };
-}
+    let matchedRole: CaseActorRole | null = null;
+
+    switch (actorUser.role) {
+      case 'superadmin':
+      case 'admin':
+        matchedRole = 'ADMIN';
+        break;
+
+      case 'case_manager':
+        matchedRole = 'CASE_MANAGER';
+        break;
+
+      case 'lawyer': {
+        const p1LawyerId = (c as any).assignedLawyerP1?.toString();
+        const p2LawyerId = (c as any).assignedLawyerP2?.toString();
+        const myIds = [actorIdStr, actorUser.lawyerProfile?.toString()].filter(Boolean);
+
+        if (p1LawyerId && myIds.includes(p1LawyerId)) {
+          matchedRole = 'LAWYER_P1';
+        } else if (p2LawyerId && myIds.includes(p2LawyerId)) {
+          matchedRole = 'LAWYER_P2';
+        }
+        break;
+      }
+
+      case 'end_user': {
+        if (c.owner?.toString() === actorIdStr) {
+          matchedRole = 'OWNER';
+        } else if (c.invitedUser?.toString() === actorIdStr) {
+          matchedRole = 'INVITED_USER';
+        }
+        break;
+      }
+    }
+
+    if (!matchedRole) {
+      throw new ForbiddenException('Actor not part of this case');
+    }
+
+    if (allowedRoles && !allowedRoles.includes(matchedRole)) {
+      throw new ForbiddenException(`Actor role ${matchedRole} is not permitted for this action`);
+    }
+
+    return { c, actorObjId, role: matchedRole };
+  }
 }
