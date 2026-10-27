@@ -1,6 +1,8 @@
 // src/cases/cases.controller.ts
 import {
   Body,
+  Put,
+  Patch,
   Controller,
   ForbiddenException,
   Get,
@@ -436,6 +438,33 @@ export class CasesController {
   // POST /cases/:id/assign-case-manager
   // ============================================================
 
+  // ============================================================
+  // UPDATE CASE / PRIORITY
+  // PUT /cases/:id
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Put(':id')
+  async updateCase(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const user = this.ensureUser(req);
+    return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id')
+  async patchCase(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const user = this.ensureUser(req);
+    return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post(':id/assign-case-manager')
   async assignCaseManager(
@@ -456,6 +485,7 @@ export class CasesController {
       id,
       managerId,
       user.id ?? user._id,
+      user.role,
     );
   }
 

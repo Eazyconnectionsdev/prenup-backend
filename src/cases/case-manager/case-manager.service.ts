@@ -821,27 +821,33 @@ export class CaseManagerService {
     file: any,
     userId: string,
   ) {
+    if (!file) {
+      throw new BadRequestException('No file provided for upload');
+    }
+
+    const safeName = file?.filename ?? file?.originalname ?? ('document-' + Date.now());
+    const originalName = file?.originalname ?? safeName;
+    const fileUrl = file?.path ?? file?.location ?? file?.filename ?? originalName;
+
     const document =
       await this.documentModel.create({
         caseId:
           new Types.ObjectId(caseId),
 
         fileName:
-          file?.filename ??
-          file?.originalname,
+          safeName,
 
         originalName:
-          file?.originalname,
+          originalName,
 
         mimeType:
-          file?.mimetype,
+          file?.mimetype || 'application/octet-stream',
 
         fileSize:
-          file?.size,
+          file?.size || 0,
 
         fileUrl:
-          file?.path ??
-          file?.filename,
+          fileUrl,
 
         uploadedBy:
           new Types.ObjectId(userId),

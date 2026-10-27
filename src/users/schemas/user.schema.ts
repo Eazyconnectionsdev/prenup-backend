@@ -82,14 +82,12 @@ export class User {
 
   @Prop({
     type: String,
-    enum: ['England', 'Wales', 'Scotland'],
     default: 'England',
   })
   jurisdiction?: string;
 
   @Prop({
     type: String,
-    enum: ['England', 'Wales', 'Scotland'],
     default: 'England',
   })
   primaryJurisdiction?: string;

@@ -387,12 +387,17 @@ export class AdminService {
 
     const passwordHash = await bcrypt.hash(payload.password, 10);
 
+    const rawJur = payload.primaryJurisdiction ?? payload.jurisdiction ?? 'England';
+    const jurisdictionValue = Array.isArray(rawJur) ? rawJur.join(', ') : String(rawJur || 'England');
+
     const userDoc = await new this.userModel({
       email: normalizedEmail,
       passwordHash,
       firstName: payload.firstName,
       lastName: payload.lastName || null,
       phone: payload.phone || null,
+      jurisdiction: jurisdictionValue,
+      primaryJurisdiction: jurisdictionValue,
       role: 'case_manager',
       emailVerified: true,    // admin-created — pre-verified
       acceptedTerms: true,
@@ -404,7 +409,45 @@ export class AdminService {
       firstName: userDoc.firstName,
       lastName: userDoc.lastName,
       role: userDoc.role,
+      jurisdiction: userDoc.jurisdiction,
+      primaryJurisdiction: userDoc.primaryJurisdiction,
     };
+  }
+
+  /**
+   * Update a Case Manager's assigned jurisdiction.
+   */
+  async updateCaseManagerJurisdiction(
+    userId: string,
+    jurisdiction: string,
+    primaryJurisdiction?: string,
+  ) {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('Invalid user ID');
+    }
+
+    const value = (jurisdiction || primaryJurisdiction || 'England').trim();
+
+    const user = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        {
+          $set: {
+            jurisdiction: value,
+            primaryJurisdiction: value,
+          },
+        },
+        { new: true },
+      )
+      .select('-passwordHash')
+      .lean()
+      .exec();
+
+    if (!user) {
+      throw new NotFoundException('Case manager not found');
+    }
+
+    return user;
   }
 
 

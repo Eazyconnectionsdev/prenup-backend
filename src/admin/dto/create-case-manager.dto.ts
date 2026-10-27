@@ -26,5 +26,11 @@ export class CreateCaseManagerDto {
   @IsString()
   @IsValidPhone()
   phone?: string;
+
+  @IsOptional()
+  jurisdiction?: any;
+
+  @IsOptional()
+  primaryJurisdiction?: any;
 }
 

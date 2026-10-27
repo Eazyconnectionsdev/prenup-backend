@@ -1290,20 +1290,54 @@ ${taskLines.join('\n\n')}`;
     return c;
   }
   
+  
+  async updateCase(
+    caseId: string,
+    updateData: any,
+    userId: string,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    if (updateData.priority !== undefined) {
+      c.priority = String(updateData.priority).toUpperCase();
+    }
+    if (updateData.title !== undefined) {
+      c.title = updateData.title;
+    }
+    await c.save();
+    return c;
+  }
+
   async assignCaseManager(
     caseId: string,
     managerId: string,
     actorId: string,
+    actorRole?: string,
   ): Promise<CaseDocument> {
     if (!Types.ObjectId.isValid(caseId))
       throw new BadRequestException('Invalid case id');
-    if (!managerId || !Types.ObjectId.isValid(managerId))
-      throw new BadRequestException('Invalid manager id');
+
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
+
+    if (!managerId || managerId === 'unassign') {
+      (c as any).assignedCaseManager = null;
+      await c.save();
+      return c;
+    }
+
+    if (!Types.ObjectId.isValid(managerId))
+      throw new BadRequestException('Invalid manager id');
+
     (c as any).assignedCaseManager = new Types.ObjectId(managerId);
 
-    c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
+    if (!c.workflowStatus || c.workflowStatus === CaseWorkflowStatus.DRAFT) {
+      c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
+    }
     await c.save();
     const populated = await this.caseModel
       .findById(c._id)
