@@ -243,4 +243,20 @@ export class AdminController {
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
     return this.adminService.createCaseManager(body);
   }
+
+  @Patch('case-managers/:id/jurisdiction')
+  async updateCaseManagerJurisdiction(
+    @Req() req,
+    @Param('id') id: string,
+    @Body('jurisdiction') jurisdiction: string,
+    @Body('primaryJurisdiction') primaryJurisdiction?: string,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateCaseManagerJurisdiction(
+      id,
+      jurisdiction,
+      primaryJurisdiction,
+    );
+  }
 }
