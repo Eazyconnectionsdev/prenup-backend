@@ -10,6 +10,8 @@ export interface PartnerInviteEmailParams {
   inviteUrl: string;
   personalMessage?: string;
   targetWeddingDate?: string;
+  // The invited address already has an account: they sign in to accept.
+  existingAccount?: boolean;
 }
 
 export interface PartnerJoinedEmailParams {
@@ -64,7 +66,7 @@ export interface CaseManagerAlertEmailParams {
  * Stage 1 - Email 1: Invitation sent to Partner (User 2)
  */
 export function buildPartnerInviteEmail(params: PartnerInviteEmailParams) {
-  const { inviterName, inviteUrl, personalMessage, targetWeddingDate } = params;
+  const { inviterName, inviteUrl, personalMessage, targetWeddingDate, existingAccount } = params;
   const weddingText = targetWeddingDate ? ` Anticipated Wedding Date: <strong>${targetWeddingDate}</strong>.<br/><br/>` : '';
   const personalMsgText = personalMessage
     ? `<div style="background:#FFF1F2;border-left:4px solid #E28691;padding:12px 16px;margin:16px 0;font-style:italic;color:#881337;text-align:left;">
@@ -73,16 +75,22 @@ export function buildPartnerInviteEmail(params: PartnerInviteEmailParams) {
     : '';
 
   const subject = `You have been invited to Lets Prenup by ${inviterName}`;
-  const text = `Hi,\n\n${inviterName} has invited you to collaborate on your prenuptial agreement on Lets Prenup.\n\nAccept your invitation and get started here: ${inviteUrl}\n\nLets Prenup`;
+  const existingAccountText = existingAccount
+    ? `You already have a Lets Prenup account with this email address, so there is nothing new to register. Sign in and accept the invitation to join them.<br/><br/>`
+    : '';
+  const text = existingAccount
+    ? `Hi,\n\n${inviterName} has invited you to collaborate on your prenuptial agreement on Lets Prenup.\n\nYou already have an account with this email address. Sign in and accept the invitation here: ${inviteUrl}\n\nLets Prenup`
+    : `Hi,\n\n${inviterName} has invited you to collaborate on your prenuptial agreement on Lets Prenup.\n\nAccept your invitation and get started here: ${inviteUrl}\n\nLets Prenup`;
   const html = buildLetsPrenupEmailHtml({
     eyebrow: 'Partner Invitation',
     heading: 'Join Lets Prenup Together',
     icon: '💍',
     body: `<strong>${inviterName}</strong> has invited you to collaborate on preparing your prenuptial agreement on Lets Prenup.<br/><br/>
+           ${existingAccountText}
            ${weddingText}
            ${personalMsgText}
            Lets Prenup provides a guided, secure, and collaborative process for you both to share your details and agree on terms transparently.`,
-    ctaLabel: 'Accept Invitation & Start',
+    ctaLabel: existingAccount ? 'Sign In & Accept Invitation' : 'Accept Invitation & Start',
     ctaUrl: inviteUrl,
     footerNote: 'If you were not expecting this invitation, you can safely ignore this email.',
   });

@@ -29,6 +29,7 @@ import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
 
 import { AcceptInviteDto } from './dto/accept-invite.dto';
+import { AcceptExistingInviteDto } from './dto/accept-existing-invite.dto';
 import { PartnerInviteService } from '../cases/partner-invite.service';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
@@ -226,7 +227,44 @@ export class AuthController {
     @Query('caseId') caseId: string,
     @Query('token') token: string,
   ) {
-    return this.partnerInviteService.openByToken(caseId, token);
+    const info = await this.partnerInviteService.openByToken(caseId, token);
+
+    // Only reachable with a valid token, so the invitee may be told that they
+    // already have an account: they sign in to accept instead of registering.
+    const existing = await this.usersService.findByEmail(info.email);
+    return { ...info, accountExists: !!existing };
+  }
+
+  // Signed-in invitee: what accepting would do (including what happens to a
+  // case they already have).
+  @UseGuards(JwtAuthGuard)
+  @Get('invite-preview')
+  async invitePreview(
+    @Req() req,
+    @Query('caseId') caseId: string,
+    @Query('token') token?: string,
+  ) {
+    return this.casesService.previewInviteForUser(req.user.id, caseId, token);
+  }
+
+  // Signed-in invitee with an existing account accepts the invitation.
+  @UseGuards(JwtAuthGuard)
+  @Post('accept-invite/existing')
+  @HttpCode(200)
+  async acceptInviteExisting(@Req() req, @Body() dto: AcceptExistingInviteDto) {
+    return this.casesService.acceptInviteAsExistingUser(
+      req.user.id,
+      dto.caseId,
+      dto.token,
+      !!dto.confirmSetAsideOwnCase,
+    );
+  }
+
+  // An open invitation addressed to the signed-in user's email, if any.
+  @UseGuards(JwtAuthGuard)
+  @Get('pending-invite')
+  async pendingInvite(@Req() req) {
+    return this.casesService.pendingInviteFor(req.user.id);
   }
 
   @Post('accept-invite')

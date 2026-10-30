@@ -1059,6 +1059,37 @@ export class Case {
   archivedAt?: Date | null;
 
   // =====================================================
+  // SET ASIDE (the owner joined their partner's case instead)
+  // The case, its data and its Case ID are kept; the ID is never reused.
+  // =====================================================
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  abandonedAt?: Date | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
+    default: null,
+  })
+  abandonedBy?: Types.ObjectId | null;
+
+  @Prop({
+    type: String,
+    default: null,
+  })
+  abandonedReason?: string | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'Case',
+    default: null,
+  })
+  supersededByCaseId?: Types.ObjectId | null;
+
+  // =====================================================
   // VERSION TRACKING
   // =====================================================
 

@@ -4,6 +4,7 @@ import {
   Put,
   Patch,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
@@ -17,8 +18,11 @@ import {
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 
 import { CasesService } from './cases.service';
+import { PartnerLinkConflictOutcome } from './schemas/partner_invite.schema';
 
 import { CreateCaseDto } from './dto/create-case.dto';
+import { RemovePartnerDto } from './dto/remove-partner.dto';
+import { ResolvePartnerConflictDto } from './dto/resolve-partner-conflict.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
@@ -63,8 +67,11 @@ export class CasesController {
   }
 
   // ============================================================
-  // CREATE CASE
+  // START A LEGAL MATTER
   // POST /cases
+  //
+  // This is the only place a Case ID is issued for a client.
+  // Idempotent: a client who already has a current case gets it back.
   // ============================================================
 
   @UseGuards(JwtAuthGuard)
@@ -77,7 +84,7 @@ export class CasesController {
 
     const title = body.title;
 
-    return this.casesService.create(
+    return this.casesService.startCase(
       user.id,
       title,
     );
@@ -262,26 +269,61 @@ export class CasesController {
       throw new ForbiddenException('Forbidden');
     }
 
-    return this.casesService.getInvite(id);
+    return this.casesService.getInvite(
+      id,
+      this.isPrivilegedRole(user.role),
+    );
   }
 
   // ============================================================
-  // ATTACH INVITED USER
-  // POST /cases/:id/attach-invited
+  // REMOVE PARTNER
+  // DELETE /cases/:id/partner
+  //
+  // Case Manager / Admin (or the owner, early on) unlinks the partner so a
+  // partner can be invited again. The partner's account is kept.
   // ============================================================
 
   @UseGuards(JwtAuthGuard)
-  @Post(':id/attach-invited')
-  async attachInvitedUser(
+  @Delete(':id/partner')
+  async removePartner(
     @Req() req: any,
     @Param('id') id: string,
+    @Body() dto: RemovePartnerDto,
   ) {
-    const user =
-      this.ensureUser(req);
+    const user = this.ensureUser(req);
 
-    return this.casesService.attachInvitedUser(
+    return this.casesService.removePartner(
       id,
-      user.id,
+      { id: (user.id ?? user._id).toString(), role: user.role },
+      dto?.reason,
+    );
+  }
+
+  // ============================================================
+  // RESOLVE A HELD PARTNER LINK (Case Manager / Admin)
+  // POST /cases/:id/invite/resolve
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/invite/resolve')
+  async resolvePartnerConflict(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: ResolvePartnerConflictDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.resolvePartnerConflict(
+      id,
+      (user.id ?? user._id).toString(),
+      dto.action === 'APPROVE'
+        ? PartnerLinkConflictOutcome.APPROVED
+        : PartnerLinkConflictOutcome.REJECTED,
+      dto.note,
     );
   }
 

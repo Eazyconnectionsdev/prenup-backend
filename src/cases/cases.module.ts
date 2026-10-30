@@ -22,6 +22,11 @@ import {
 } from './schemas/case_backup.schema';
 
 import {
+  CaseAuditLog,
+  CaseAuditLogSchema,
+} from './schemas/case_audit_logs.schema';
+
+import {
   Counter,
   CounterSchema,
 } from '../common/schemas/counter.schema';
@@ -81,6 +86,11 @@ import { LawyerModule } from './lawyer-manager/lawyer.module';
       {
         name: Counter.name,
         schema: CounterSchema,
+      },
+
+      {
+        name: CaseAuditLog.name,
+        schema: CaseAuditLogSchema,
       },
     ]),
 

@@ -81,13 +81,10 @@ export class AuthService {
       emailVerified: false,
     } as any);
 
-    const createdCase = await this.casesService.create(user._id.toString());
-
-    await this.userModel.findByIdAndUpdate(
-      user._id,
-      { $set: { inviteCaseId: createdCase._id } },
-      { new: true },
-    );
+    // No case is created here. A Case ID is issued only when the client
+    // starts a legal matter (POST /cases); an account is not a matter, and a
+    // partner who is invited later must be able to join someone else's case
+    // without ever having been given one of their own.
 
     // Capture registration location (fire-and-forget)
     void this.locationService.capture(user._id.toString(), ip, 'registration');
@@ -362,6 +359,11 @@ export class AuthService {
 
     }
 
+    // One partner per case.
+    if (caseDoc.invitedUser) {
+      throw new BadRequestException('This case already has a partner');
+    }
+
     if (
       !caseDoc.inviteTokenExpires ||
       caseDoc.inviteTokenExpires < new Date()
@@ -393,10 +395,14 @@ export class AuthService {
         email,
       );
 
+    // They already have an account: sign in and accept instead of registering
+    // a duplicate (or being asked to delete the account).
     if (existing) {
-      throw new BadRequestException(
-        'User already exists',
-      );
+      throw new BadRequestException({
+        code: 'ACCOUNT_EXISTS',
+        message:
+          'An account with this email already exists. Please sign in to accept the invitation.',
+      });
     }
 
     const firstName = profile.firstName?.trim() || partner.firstName;
@@ -445,18 +451,6 @@ export class AuthService {
       );
     }
 
-    await this.userModel.updateOne(
-      { _id: caseDoc.owner },
-      {
-
-        $set: {
-          invitedUser: user._id,
-        },
-
-      },
-    );
-
-
     const createdId =
       user && (user as any)._id
         ? (user as any)._id.toString()
@@ -476,9 +470,27 @@ export class AuthService {
       );
     }
 
-    await this.casesService.attachInvitedUser(
-      caseId,
-      createdId,
+    // Claims the case's single partner slot. If someone else got there first
+    // the new account is withdrawn rather than left dangling.
+    try {
+      await this.casesService.attachInvitedUser(
+        caseId,
+        createdId,
+      );
+    } catch (err) {
+      await this.userModel.deleteOne({ _id: user._id });
+      throw err;
+    }
+
+    await this.userModel.updateOne(
+      { _id: caseDoc.owner },
+      {
+
+        $set: {
+          invitedUser: user._id,
+        },
+
+      },
     );
 
     // Track who actually registered (compared with what the inviter typed).
@@ -522,6 +534,8 @@ export class AuthService {
     return user;
   }
 
+  // The case owner removes their own partner. The partner's account is kept
+  // (only the link is cut), so they can be invited again.
   async deletePartner(currentUserId: string): Promise<{ message: string }> {
     const user = await this.userModel.findById(currentUserId);
 
@@ -529,29 +543,14 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    if (!user.invitedUser) {
+    if (!user.invitedUser || !user.inviteCaseId) {
       throw new BadRequestException('No partner linked to this user');
     }
 
-    const partner = await this.userModel.findByIdAndDelete(
-      user.invitedUser._id,
-    );
-    if (!partner) {
-      throw new NotFoundException('Partner not found');
-    }
-
-    partner.invitedBy = null;
-    user.invitedUser = null;
-
-    await user.save();
-
-    if (user.inviteCaseId) {
-      await this.casesService.deleteCaseDataForPartner(
-        user.inviteCaseId.toString(),
-      );
-    }
-
-    return { message: 'Partner removed successfully' };
+    return this.casesService.removePartner(user.inviteCaseId.toString(), {
+      id: currentUserId,
+      role: user.role,
+    });
   }
 
   //

@@ -142,18 +142,19 @@ export class MailService implements OnModuleInit {
     return fallback ?? null;
   }
 
-  async sendInvite(to: string, inviteUrl: string, opts?: { inviterName?: string; personalMessage?: string; targetWeddingDate?: string }) {
+  async sendInvite(to: string, inviteUrl: string, opts?: { inviterName?: string; personalMessage?: string; targetWeddingDate?: string; existingAccount?: boolean }) {
     const inviterName = opts?.inviterName || 'Your Partner';
     const { subject, text, html } = buildPartnerInviteEmail({
       inviterName,
       inviteUrl,
       personalMessage: opts?.personalMessage,
       targetWeddingDate: opts?.targetWeddingDate,
+      existingAccount: opts?.existingAccount,
     });
     return this.sendRaw({ to, subject, text, html });
   }
 
-  async sendPartnerInvite(to: string, inviteUrl: string, opts?: { inviterName?: string; personalMessage?: string; targetWeddingDate?: string }) {
+  async sendPartnerInvite(to: string, inviteUrl: string, opts?: { inviterName?: string; personalMessage?: string; targetWeddingDate?: string; existingAccount?: boolean }) {
     return this.sendInvite(to, inviteUrl, opts);
   }
 

@@ -1,6 +1,7 @@
 // src/cases/cases.service.ts
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
   ForbiddenException,
@@ -27,10 +28,21 @@ import {
 import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
 import { CaseBackup, CaseBackupDocument } from './schemas/case_backup.schema';
 import { Counter, CounterDocument } from '../common/schemas/counter.schema';
+import { User, UserDocument } from '../users/schemas/user.schema';
+import {
+  CaseAuditLog,
+  CaseAuditLogDocument,
+} from './schemas/case_audit_logs.schema';
+import { PartnerLinkConflictOutcome } from './schemas/partner_invite.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { PartnerInviteService } from './partner-invite.service';
 import { generateCaseNumber } from '../utils/case-number.util';
+
+// Deliberately vague: it must not reveal whether the address has an account
+// or who it is linked to.
+const CANNOT_INVITE_MESSAGE =
+  "This email address can't be invited to your case. Please check the address or contact support.";
 
 @Injectable()
 export class CasesService {
@@ -42,6 +54,8 @@ export class CasesService {
     private mailService: MailService,
     @InjectModel(CaseBackup.name) private questionnaireBackupModel: Model<CaseBackupDocument>,
     @InjectModel(Counter.name) private counterModel: Model<CounterDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(CaseAuditLog.name) private auditLogModel: Model<CaseAuditLogDocument>,
     private partnerInvites: PartnerInviteService,
   ) { }
   private isPrivilegedRole(role?: string): boolean {
@@ -215,10 +229,18 @@ export class CasesService {
     );
   }
 
-  async create(ownerId: string, title?: string): Promise<CaseDocument> {
+  // Issues a new Case ID. Only reached through startCase: registering an
+  // account, inviting a partner and joining as a partner never get here.
+  async create(
+    ownerId: string,
+    title?: string,
+    id?: Types.ObjectId,
+  ): Promise<CaseDocument> {
     const caseNumber = await generateCaseNumber(this.counterModel);
 
     const c = new this.caseModel({
+      ...(id ? { _id: id } : {}),
+
       title: title || 'Untitled case',
 
       owner: new Types.ObjectId(ownerId),
@@ -231,6 +253,522 @@ export class CasesService {
     });
 
     return c.save();
+  }
+
+  // A case that was given up (or cancelled) no longer counts as the user's
+  // current matter. It and its Case ID stay on record.
+  private isSetAside(c: Pick<Case, 'workflowStatus' | 'abandonedAt'>): boolean {
+    return (
+      !!c.abandonedAt || c.workflowStatus === CaseWorkflowStatus.CANCELLED
+    );
+  }
+
+  // Starts a new legal matter for the signed-in client and issues its Case ID.
+  // Idempotent: a client with a current case gets that one back, so a retry
+  // or a double click can never produce a second Case ID.
+  async startCase(userId: string, title?: string): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException('Invalid user id');
+    }
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role !== 'end_user') {
+      throw new ForbiddenException('Only clients can start a case');
+    }
+
+    const current = user.inviteCaseId
+      ? await this.caseModel.findById(user.inviteCaseId)
+      : null;
+    if (current && !this.isSetAside(current)) {
+      if (current.owner.toString() !== userId) {
+        throw new BadRequestException(
+          "You have joined your partner's case, so you can't start a separate one.",
+        );
+      }
+      return current;
+    }
+
+    // Claim the slot before issuing a Case ID, so two simultaneous requests
+    // cannot both create a case (and burn a number).
+    const id = new Types.ObjectId();
+    const claimed = await this.userModel.updateOne(
+      { _id: user._id, inviteCaseId: user.inviteCaseId ?? null },
+      { $set: { inviteCaseId: id } },
+    );
+    if (!claimed.modifiedCount) {
+      const fresh = await this.userModel.findById(userId);
+      const existing = fresh?.inviteCaseId
+        ? await this.caseModel.findById(fresh.inviteCaseId)
+        : null;
+      if (existing) return existing;
+      throw new ConflictException('Could not start your case. Please try again.');
+    }
+
+    try {
+      return await this.create(userId, title, id);
+    } catch (err) {
+      await this.userModel.updateOne(
+        { _id: user._id, inviteCaseId: id },
+        { $set: { inviteCaseId: user.inviteCaseId ?? null } },
+      );
+      throw err;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Joining a partner's case with an account that already exists
+  // ---------------------------------------------------------------------
+
+  // True when a questionnaire answer holds something the user typed. Booleans
+  // are ignored: they are almost always untouched defaults.
+  private hasContent(value: unknown): boolean {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (typeof value === 'number') return true;
+    if (value instanceof Date) return true;
+    if (Array.isArray(value)) return value.some((v) => this.hasContent(v));
+    if (typeof value === 'object') {
+      if (value instanceof Types.ObjectId) return false;
+      const plain =
+        typeof (value as any).toObject === 'function'
+          ? (value as any).toObject()
+          : value;
+      return Object.entries(plain as Record<string, unknown>).some(
+        ([k, v]) => k !== '_id' && k !== '__v' && this.hasContent(v),
+      );
+    }
+    return false;
+  }
+
+  // Does this case hold anything worth protecting: money, answers, progress?
+  // An empty draft (at most an agreement choice) is safe to set aside once
+  // the owner confirms; anything else needs a person to decide.
+  assessCase(
+    c: CaseDocument,
+    owner?: Pick<User, 'paymentDone'> | null,
+  ): { meaningful: boolean; reasons: string[] } {
+    const reasons: string[] = [];
+
+    if (
+      c.paymentCompleted ||
+      owner?.paymentDone ||
+      (c.paymentStatus && c.paymentStatus !== PaymentStatus.PENDING)
+    ) {
+      reasons.push('Payment has been made or started');
+    }
+    if (c.invitedUser) reasons.push('A partner has already joined');
+    if (
+      c.workflowStatus &&
+      ![CaseWorkflowStatus.NOT_PAID, CaseWorkflowStatus.DRAFT].includes(
+        c.workflowStatus,
+      )
+    ) {
+      reasons.push(`Case has progressed to ${c.workflowStatus}`);
+    }
+    const sections = [
+      'myInformation',
+      'partnerInformation',
+      'jointInformation',
+      'independentLegalAdvice',
+    ] as const;
+    if (sections.some((k) => (c.status as any)?.[k]?.submitted === true)) {
+      reasons.push('Sections have been submitted');
+    }
+    if (sections.some((k) => this.hasContent((c as any)[k]))) {
+      reasons.push('Questionnaire answers have been entered');
+    }
+    if (c.assignedCaseManager || c.assignedLawyerP1 || c.assignedLawyerP2) {
+      reasons.push('A case manager or lawyer has been assigned');
+    }
+    if ((c.totalDocuments ?? 0) > 0 || (c.totalNotes ?? 0) > 0) {
+      reasons.push('Documents or notes are attached');
+    }
+
+    return { meaningful: reasons.length > 0, reasons };
+  }
+
+  // The user's own open cases, other than the one they are being invited to.
+  private async ownOpenCases(
+    user: UserDocument,
+    exceptCaseId?: Types.ObjectId,
+  ) {
+    const q: Record<string, any> = {
+      owner: user._id,
+      abandonedAt: null,
+      workflowStatus: { $ne: CaseWorkflowStatus.CANCELLED },
+    };
+    if (exceptCaseId) q._id = { $ne: exceptCaseId };
+    return this.caseModel.find(q).exec();
+  }
+
+  // One partner per person, in both directions.
+  private async assertFreeToLink(user: UserDocument, targetCaseId: Types.ObjectId) {
+    const joinedElsewhere = await this.caseModel.exists({
+      invitedUser: user._id,
+      _id: { $ne: targetCaseId },
+    });
+    const ownsCouple = await this.caseModel.exists({
+      owner: user._id,
+      invitedUser: { $ne: null },
+      abandonedAt: null,
+      _id: { $ne: targetCaseId },
+    });
+    if (joinedElsewhere || ownsCouple) {
+      throw new BadRequestException(
+        'Your account is already linked to a partner, so it cannot join another case.',
+      );
+    }
+  }
+
+  private async audit(
+    caseId: Types.ObjectId | string,
+    userId: string | Types.ObjectId,
+    action: string,
+    notes?: string,
+    extra?: { oldValue?: any; newValue?: any },
+  ) {
+    try {
+      await this.auditLogModel.create({
+        caseId: new Types.ObjectId(String(caseId)),
+        userId: new Types.ObjectId(String(userId)),
+        action,
+        notes,
+        ...extra,
+      });
+    } catch (err) {
+      // An audit hiccup must not undo a link that already happened.
+      console.error(`Failed to write audit log ${action}`, err);
+    }
+  }
+
+  // Sets a case aside without deleting anything. The Case ID stays attached
+  // to it and is never issued again.
+  private async setCaseAside(
+    c: CaseDocument,
+    actorId: string,
+    supersededBy: Types.ObjectId,
+    reason: string,
+  ) {
+    await this.caseModel.updateOne(
+      { _id: c._id },
+      {
+        $set: {
+          workflowStatus: CaseWorkflowStatus.CANCELLED,
+          abandonedAt: new Date(),
+          abandonedBy: new Types.ObjectId(actorId),
+          abandonedReason: reason,
+          supersededByCaseId: supersededBy,
+          partnerInvited: false,
+          inviteToken: null,
+          inviteTokenExpires: null,
+        },
+      },
+    );
+    await this.audit(c._id, actorId, 'CASE_SET_ASIDE', reason, {
+      oldValue: { workflowStatus: c.workflowStatus },
+      newValue: { supersededByCaseId: supersededBy },
+    });
+  }
+
+  // What the signed-in invitee sees before accepting: who invited them and
+  // what would happen to a case they already have.
+  async previewInviteForUser(
+    userId: string,
+    caseId: string,
+    token?: string | null,
+  ) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    const invite = await this.partnerInvites.findAcceptable(caseId, user, token);
+    const c = await this.caseModel.findById(caseId).populate('owner', 'firstName lastName');
+    if (!c) throw new BadRequestException('Invalid invite link');
+
+    const own = await this.ownOpenCases(user, c._id);
+    const assessed = own.map((oc) => ({
+      caseNumber: oc.caseNumber ?? null,
+      createdAt: (oc as any).createdAt ?? null,
+      ...this.assessCase(oc, user),
+    }));
+    const conflict = invite.conflict ?? null;
+    const owner: any = c.owner;
+
+    return {
+      inviter: {
+        firstName: owner?.firstName ?? null,
+        lastName: owner?.lastName ?? null,
+      },
+      caseNumber: c.caseNumber ?? null,
+      expiresAt: invite.expiresAt,
+      emailMatchesInvite:
+        (user.email ?? '').trim().toLowerCase() === invite.invitee.email,
+      // NONE: nothing to give up. DRAFT: unused, confirm to set it aside.
+      // NEEDS_RESOLUTION: has data/payment, staff must decide first.
+      // APPROVED: staff cleared it, confirm to proceed.
+      ownCase: assessed.some((a) => a.meaningful)
+        ? conflict?.outcome === PartnerLinkConflictOutcome.APPROVED
+          ? 'APPROVED'
+          : 'NEEDS_RESOLUTION'
+        : assessed.length
+          ? 'DRAFT'
+          : 'NONE',
+      ownCases: assessed,
+      resolutionRequested: !!conflict && !conflict.resolvedAt,
+    };
+  }
+
+  // A signed-in user with an existing account accepts a partner invitation.
+  // Their account is linked to the inviter's case as the secondary applicant;
+  // nothing is created, no Case ID is issued, no account is deleted.
+  async acceptInviteAsExistingUser(
+    userId: string,
+    caseId: string,
+    token: string | null | undefined,
+    confirmSetAsideOwnCase: boolean,
+  ) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role !== 'end_user') {
+      throw new ForbiddenException(
+        'Only client accounts can join a case as a partner',
+      );
+    }
+
+    const invite = await this.partnerInvites.findAcceptable(caseId, user, token);
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new BadRequestException('Invalid invite link');
+
+    if (c.owner.toString() === userId) {
+      throw new BadRequestException("You can't accept your own invitation");
+    }
+    if (c.invitedUser) {
+      throw new BadRequestException('This case already has a partner');
+    }
+    if (this.isSetAside(c)) {
+      throw new BadRequestException('This case is no longer open');
+    }
+
+    await this.assertFreeToLink(user, c._id);
+
+    const own = await this.ownOpenCases(user, c._id);
+    const assessed = own.map((oc) => ({ oc, ...this.assessCase(oc, user) }));
+    const meaningful = assessed.filter((a) => a.meaningful);
+    const staffApproved =
+      !!invite.conflict?.resolvedAt &&
+      invite.conflict.outcome === PartnerLinkConflictOutcome.APPROVED;
+
+    // Real data or payment on their own case: never decided automatically.
+    if (meaningful.length && !staffApproved) {
+      const reasons = [...new Set(meaningful.flatMap((a) => a.reasons))];
+      const wasOpen = !!invite.conflict && !invite.conflict.resolvedAt;
+      await this.partnerInvites.flagConflict(caseId, {
+        userId: user._id,
+        existingCaseId: meaningful[0].oc._id,
+        reasons,
+      });
+      if (!wasOpen) {
+        await this.audit(
+          c._id,
+          userId,
+          'PARTNER_LINK_FLAGGED',
+          `Invited partner already has case ${meaningful[0].oc.caseNumber ?? meaningful[0].oc._id}`,
+          { newValue: { existingCaseId: meaningful[0].oc._id, reasons } },
+        );
+        await this.notifyStaffOfLinkConflict(
+          c,
+          meaningful[0].oc,
+          reasons,
+        );
+      }
+      return {
+        success: false,
+        linked: false,
+        resolutionRequired: true,
+        message:
+          'You already have a case with information or a payment on it. We have asked our team to review this before linking you to your partner. Nothing has been changed, and we will contact you.',
+      };
+    }
+
+    if (assessed.length && !confirmSetAsideOwnCase) {
+      throw new ConflictException({
+        code: 'CONFIRM_SET_ASIDE_OWN_CASE',
+        message:
+          'You have an unused case of your own. Confirm that you want to set it aside and join your partner’s case instead. It will not be deleted.',
+        ownCases: assessed.map((a) => a.oc.caseNumber ?? String(a.oc._id)),
+      });
+    }
+
+    // One partner per case: the claim is conditional, so a concurrent accept
+    // cannot link a second person.
+    const claimed = await this.caseModel.updateOne(
+      { _id: c._id, invitedUser: null },
+      {
+        $set: {
+          invitedUser: user._id,
+          inviteToken: null,
+          inviteTokenExpires: null,
+        },
+      },
+    );
+    if (!claimed.modifiedCount) {
+      throw new BadRequestException('This case already has a partner');
+    }
+
+    try {
+      await this.userModel.updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            endUserType: 'user2',
+            invitedBy: c.owner,
+            inviteCaseId: c._id,
+          },
+        },
+      );
+      await this.userModel.updateOne(
+        { _id: c.owner },
+        { $set: { invitedUser: user._id } },
+      );
+    } catch (err) {
+      await this.caseModel.updateOne(
+        { _id: c._id, invitedUser: user._id },
+        { $set: { invitedUser: null } },
+      );
+      throw err;
+    }
+
+    for (const a of assessed) {
+      await this.setCaseAside(
+        a.oc,
+        userId,
+        c._id,
+        'Owner joined their partner’s case',
+      );
+    }
+    await this.partnerInvites.markAccepted(caseId, user);
+    await this.partnerInvites.revokeOutstanding({
+      email: user.email,
+      ownCaseIds: own.map((o) => o._id),
+      exceptCaseId: c._id,
+    });
+    await this.audit(c._id, userId, 'PARTNER_LINKED', 'Existing account linked as partner', {
+      newValue: { partnerId: user._id },
+    });
+    await this.notifyPartnerJoined(caseId);
+
+    return { success: true, linked: true, caseId: String(c._id) };
+  }
+
+  // An open invitation addressed to this signed-in client's email, for
+  // someone who signed up on their own instead of using the emailed link.
+  // The token is never exposed: acceptance is by being signed in as the
+  // invited (verified) address.
+  async pendingInviteFor(userId: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user || user.role !== 'end_user' || !user.emailVerified) {
+      return { invite: null };
+    }
+
+    const joined = await this.caseModel.exists({ invitedUser: user._id });
+    if (joined) return { invite: null };
+
+    const invite = await this.partnerInvites.findPendingForEmail(user.email);
+    if (!invite) return { invite: null };
+
+    const c = await this.caseModel
+      .findById(invite.caseId)
+      .populate('owner', 'firstName lastName')
+      .exec();
+    const owner: any = c?.owner;
+    if (
+      !c ||
+      c.invitedUser ||
+      this.isSetAside(c) ||
+      String(owner?._id) === String(user._id)
+    ) {
+      return { invite: null };
+    }
+
+    return {
+      invite: {
+        caseId: String(c._id),
+        caseNumber: c.caseNumber ?? null,
+        inviterFirstName: owner?.firstName ?? null,
+        inviterLastName: owner?.lastName ?? null,
+        expiresAt: invite.expiresAt,
+        resolutionRequested: !!invite.conflict && !invite.conflict.resolvedAt,
+      },
+    };
+  }
+
+  private async staffEmailsFor(c: CaseDocument): Promise<string[]> {
+    const emails = new Set<string>();
+    (this.config.get<string>('CASE_MANAGER_EMAILS') || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((e) => emails.add(e));
+
+    const ids = c.assignedCaseManager ? [c.assignedCaseManager] : [];
+    const staff = await this.userModel
+      .find(
+        ids.length
+          ? { _id: { $in: ids } }
+          : { role: { $in: ['admin', 'superadmin'] } },
+      )
+      .select('email')
+      .lean()
+      .exec();
+    staff.forEach((s: any) => s.email && emails.add(s.email));
+    return [...emails];
+  }
+
+  private async notifyStaffOfLinkConflict(
+    target: CaseDocument,
+    existing: CaseDocument,
+    reasons: string[],
+  ) {
+    try {
+      const subject = `Partner link needs review — ${target.caseNumber ?? target._id}`;
+      const body = `The partner invited to case ${target.caseNumber ?? target._id} already has their own case (${existing.caseNumber ?? existing._id}) that holds data or a payment.
+
+Why it was held:
+- ${reasons.join('\n- ')}
+
+Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? target._id} to approve or reject the link.`;
+      for (const to of await this.staffEmailsFor(target)) {
+        await this.mailService.sendMail(to, subject, body);
+      }
+    } catch (err) {
+      console.error('Failed to notify staff of partner link conflict', err);
+    }
+  }
+
+  // Staff decision on a held link. APPROVED lets the invitee confirm and
+  // join (their own case is set aside, never deleted); REJECTED withdraws
+  // the invitation.
+  async resolvePartnerConflict(
+    caseId: string,
+    actorId: string,
+    outcome: PartnerLinkConflictOutcome,
+    note?: string,
+  ) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    await this.partnerInvites.resolveConflict(caseId, actorId, outcome, note);
+    await this.audit(
+      c._id,
+      actorId,
+      outcome === PartnerLinkConflictOutcome.APPROVED
+        ? 'PARTNER_LINK_APPROVED'
+        : 'PARTNER_LINK_REJECTED',
+      note,
+    );
+    return this.getInvite(caseId, true);
   }
   async markPaymentCompleted(caseId: string, actorId: string) {
     const c = await this.caseModel.findById(caseId);
@@ -265,7 +803,11 @@ export class CasesService {
   async findByUser(userId: string | Types.ObjectId): Promise<CaseDocument[]> {
     const id = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     return this.caseModel
-      .find({ $or: [{ owner: id }, { invitedUser: id }] })
+      .find({
+        $or: [{ owner: id }, { invitedUser: id }],
+        // Cases the user gave up on stay on record but are not theirs to work on.
+        abandonedAt: null,
+      })
       .exec();
   }
   async findByCaseId(
@@ -273,18 +815,39 @@ export class CasesService {
   ): Promise<CaseDocument | null> {
     return this.caseModel.findOne({ _id: caseId }).exec();
   }
+  // Links a newly registered partner. One partner per case: the update only
+  // applies while the slot is empty (or already theirs), so it can never
+  // replace someone who has joined.
   async attachInvitedUser(
     caseId: string,
     userId: string,
   ): Promise<CaseDocument> {
-    const c = await this.caseModel.findById(caseId);
-    if (!c) throw new NotFoundException('Case not found');
-    c.invitedUser = new Types.ObjectId(userId);
-    c.inviteToken = null;
-    c.inviteTokenExpires = null;
-    const saved = await c.save();
+    const saved = await this.caseModel.findOneAndUpdate(
+      {
+        _id: caseId,
+        $or: [{ invitedUser: null }, { invitedUser: new Types.ObjectId(userId) }],
+      },
+      {
+        $set: {
+          invitedUser: new Types.ObjectId(userId),
+          inviteToken: null,
+          inviteTokenExpires: null,
+        },
+      },
+      { new: true },
+    );
+    if (!saved) {
+      const exists = await this.caseModel.exists({ _id: caseId });
+      if (!exists) throw new NotFoundException('Case not found');
+      throw new BadRequestException('This case already has a partner');
+    }
 
-    // Notify primary applicant that partner has joined
+    await this.notifyPartnerJoined(caseId);
+    return saved;
+  }
+
+  // Tells the primary applicant that their partner has joined.
+  private async notifyPartnerJoined(caseId: string) {
     try {
       const populated = await this.caseModel.findById(caseId).populate('owner invitedUser').lean().exec();
       const ownerEmail = (populated?.owner as any)?.email;
@@ -299,8 +862,6 @@ export class CasesService {
     } catch (err) {
       console.error('Failed to send partner joined notification', err);
     }
-
-    return saved;
   }
 
   // Onboarding belongs to the case owner (user 1) only; the invited partner
@@ -352,8 +913,40 @@ export class CasesService {
     };
   }
 
-  getInvite(caseId: string) {
-    return this.partnerInvites.getForCase(caseId);
+  // Staff see the full link conflict (the other case and why it was held).
+  // The inviter only learns that the link is waiting on a review: what the
+  // invited person has on their own account is not theirs to see.
+  async getInvite(caseId: string, forStaff = false) {
+    const result: any = await this.partnerInvites.getForCase(caseId);
+    const conflict = result?.invite?.conflict;
+    if (!conflict) return result;
+
+    if (!forStaff) {
+      result.invite.conflict = {
+        open: !conflict.resolvedAt,
+        outcome: conflict.outcome ?? null,
+      };
+      return result;
+    }
+
+    const existing = await this.caseModel
+      .findById(conflict.existingCaseId)
+      .select('caseNumber workflowStatus paymentCompleted')
+      .lean()
+      .exec();
+    result.invite.conflict = {
+      ...conflict,
+      open: !conflict.resolvedAt,
+      existingCase: existing
+        ? {
+            _id: String(existing._id),
+            caseNumber: existing.caseNumber ?? null,
+            workflowStatus: existing.workflowStatus,
+            paymentCompleted: !!existing.paymentCompleted,
+          }
+        : null,
+    };
+    return result;
   }
 
   async invite(caseId: string, inviterId: string, dto: InvitePartnerDto) {
@@ -363,8 +956,42 @@ export class CasesService {
       throw new NotFoundException('Case not found');
     }
 
-    // A partner who already joined can't be re-invited.
+    if (this.isSetAside(c)) {
+      throw new BadRequestException('This case is no longer open');
+    }
+
+    // A partner who already joined can't be re-invited (until removed).
     await this.partnerInvites.assertCanInvite(caseId);
+    if (c.invitedUser) {
+      throw new BadRequestException('Your partner has already joined this case');
+    }
+
+    // One partner per person. If the address already has an account, the
+    // person signs in and accepts; they are never asked to register again or
+    // to delete anything.
+    const inviteeEmail = dto.email.trim().toLowerCase();
+    const owner = await this.userModel.findById(c.owner).select('email');
+    if (owner?.email === inviteeEmail) {
+      throw new BadRequestException("You can't invite yourself");
+    }
+    const existingAccount = await this.userModel.findOne({ email: inviteeEmail });
+    if (existingAccount) {
+      if (existingAccount.role !== 'end_user') {
+        throw new BadRequestException(CANNOT_INVITE_MESSAGE);
+      }
+      const linkedElsewhere = await this.caseModel.exists({
+        invitedUser: existingAccount._id,
+        _id: { $ne: c._id },
+      });
+      const ownsCouple = await this.caseModel.exists({
+        owner: existingAccount._id,
+        invitedUser: { $ne: null },
+        abandonedAt: null,
+      });
+      if (linkedElsewhere || ownsCouple) {
+        throw new BadRequestException(CANNOT_INVITE_MESSAGE);
+      }
+    }
 
     const token = crypto.randomBytes(32).toString('hex');
 
@@ -412,9 +1039,16 @@ export class CasesService {
       personalMessage: dto.personalMessage || '',
     });
 
-    const inviteUrl = `${this.config.get('APP_BASE_URL')}/register-partner?${params.toString()}`;
-    console.log('dto.email', dto.email);
-    await this.mailService.sendInvite(dto.email, inviteUrl);
+    // Existing accounts go straight to the sign-in-and-accept page; anyone
+    // else registers. (The register page also hands an existing account over
+    // to sign-in, for someone who signed up after the invite was sent.)
+    const baseUrl = this.config.get('APP_BASE_URL');
+    const inviteUrl = existingAccount
+      ? `${baseUrl}/accept-invite?${new URLSearchParams({ caseId: c._id.toString(), token }).toString()}`
+      : `${baseUrl}/register-partner?${params.toString()}`;
+    await this.mailService.sendInvite(dto.email, inviteUrl, {
+      existingAccount: !!existingAccount,
+    });
 
     return {
       inviteUrl,
@@ -1273,32 +1907,134 @@ ${taskLines.join('\n\n')}`;
       .exec();
   }
 
-  async deleteCaseDataForPartner(caseId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(caseId)) {
-      throw new BadRequestException('Invalid case id');
-    }
-
+  // Unlinks the partner from the case and clears what they entered, so the
+  // owner can invite someone (including the same person) again. The case, its
+  // Case ID and the owner's own answers are untouched.
+  private async clearPartnerFromCase(caseId: string): Promise<void> {
     const updated = await this.caseModel.findByIdAndUpdate(
       caseId,
       {
         $set: {
+          invitedUser: null,
+          invitedEmail: null,
+          partnerInvited: false,
+          inviteToken: null,
+          inviteTokenExpires: null,
+          partnerInviteDetails: {},
+
           partnerInformation: {},
-
           'status.partnerInformation.submitted': false,
-
           'status.partnerInformation.submittedBy': null,
-
           'status.partnerInformation.submittedAt': null,
+
+          preQuestionnaireUser2: this.makeEmptyPreQuestionnaire(),
+          'approval.user2Approved': false,
+          'approval.user2ApprovedAt': null,
+          'approval.p2ReviewStatus': PartnerReviewStatus.IN_PROGRESS,
         },
       },
-      {
-        new: true,
-      },
+      { new: true },
     );
 
     if (!updated) {
       throw new NotFoundException('Case not found');
     }
+  }
+
+  // Removes the partner from a case. Allowed for the case owner (early
+  // stages only), Case Managers and Admins. The partner's account is NOT
+  // deleted: it is released so they can accept a fresh invitation (or start
+  // their own matter). Their answers are snapshotted before being cleared.
+  async removePartner(
+    caseId: string,
+    actor: { id: string; role?: string },
+    reason?: string,
+  ) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const privileged = this.isPrivilegedRole(actor.role);
+    if (!privileged && c.owner.toString() !== actor.id) {
+      throw new ForbiddenException(
+        'Only the case owner, a case manager or an admin can remove the partner',
+      );
+    }
+    if (!c.invitedUser) {
+      throw new BadRequestException('No partner is linked to this case');
+    }
+    if (
+      [
+        CaseWorkflowStatus.COMPLETED,
+        CaseWorkflowStatus.ARCHIVED,
+        CaseWorkflowStatus.CANCELLED,
+      ].includes(c.workflowStatus)
+    ) {
+      throw new BadRequestException(
+        'The partner cannot be removed from a closed case',
+      );
+    }
+    if (
+      !privileged &&
+      ![CaseWorkflowStatus.NOT_PAID, CaseWorkflowStatus.DRAFT].includes(
+        c.workflowStatus,
+      )
+    ) {
+      throw new ForbiddenException(
+        'Your case is already under review. Please ask your case manager to remove your partner.',
+      );
+    }
+
+    const partnerId = c.invitedUser;
+    const [partner, owner] = await Promise.all([
+      this.userModel.findById(partnerId).select('email firstName').lean().exec(),
+      this.userModel.findById(c.owner).select('email firstName').lean().exec(),
+    ]);
+
+    // Keep the partner's answers before they are cleared.
+    await this.createQuestionnaireBackup(caseId, actor.id);
+    await this.clearPartnerFromCase(caseId);
+
+    await this.userModel.updateOne(
+      { _id: partnerId, inviteCaseId: c._id },
+      { $set: { endUserType: 'user1', invitedBy: null, inviteCaseId: null } },
+    );
+    await this.userModel.updateOne(
+      { _id: c.owner },
+      { $set: { invitedUser: null } },
+    );
+    await this.partnerInvites.markRemoved(caseId, actor.id, reason);
+    await this.audit(
+      c._id,
+      actor.id,
+      'PARTNER_REMOVED',
+      reason?.trim() || undefined,
+      { oldValue: { partnerId, partnerEmail: partner?.email ?? null } },
+    );
+
+    const caseLabel = c.caseNumber ?? String(c._id);
+    const note = (to?: string | null, text?: string) =>
+      to && text
+        ? this.mailService
+            .sendMail(to, `Update to case ${caseLabel}`, text)
+            .catch((err) =>
+              console.error('Failed to send partner removal email', err),
+            )
+        : Promise.resolve();
+    await Promise.all([
+      note(
+        partner?.email,
+        `Hi ${partner?.firstName || 'there'},\n\nYou have been removed from case ${caseLabel}. Your account has not been deleted. You can sign in at any time to start your own matter or accept a new invitation.\n\nLets Prenup`,
+      ),
+      note(
+        owner?.email,
+        `Hi ${owner?.firstName || 'there'},\n\nYour partner has been removed from case ${caseLabel}. You can now invite a partner again from your dashboard.\n\nLets Prenup`,
+      ),
+    ]);
+
+    return { message: 'Partner removed successfully' };
   }
 
   private ensureApprovalObj(c: CaseDocument) {
