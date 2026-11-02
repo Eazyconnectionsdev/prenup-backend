@@ -1,19 +1,64 @@
 
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
-import { Company, CompanyDocument } from './schemas/company.schema';
-import { Lawyer, LawyerDocument } from './schemas/lawyer.schema';
+import { randomUUID } from 'crypto';
+import * as path from 'path';
+import { ConfigService } from '@nestjs/config';
+import { Company, CompanyDocument, COMPANY_FILE_CATEGORIES } from './schemas/company.schema';
+import { Lawyer, LawyerDocument, LAWYER_FILE_CATEGORIES } from './schemas/lawyer.schema';
 import { Enquiry, EnquiryDocument } from './schemas/enquiry.schema';
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
+import { CreateLawyerDocumentDto } from './dto/create-lawyer-document.dto';
 import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
+import { CreateCompanyDto } from './dto/create-company.dto';
+import { CreateCompanyDocumentDto } from './dto/create-company-document.dto';
+import { S3Service } from '../common/s3.service';
+import { AuthService } from '../auth/auth.service';
+import { MailService } from '../mail/mail.service';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { Case, CaseDocument, CaseWorkflowStatus } from '../cases/schemas/case.schema';
 import { Settings, SettingsDocument } from './schemas/settings.schema';
 
+export const MAX_COMPANY_FILE_BYTES = 10 * 1024 * 1024;
+
+// Allowed company document types, keyed by extension. The stored content type
+// comes from here, not from what the client claims.
+const COMPANY_FILE_TYPES: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+};
+
+export const MAX_LAWYER_PHOTO_BYTES = 5 * 1024 * 1024;
+
+const LAWYER_PHOTO_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+};
+
+const COMPANY_REQUIRED_FIELDS = [
+  'name', 'companyType', 'status', 'email', 'phone',
+  'addressLine1', 'city', 'postcode', 'country',
+] as const;
+
+// Optional fields a blank form value clears.
+const COMPANY_OPTIONAL_FIELDS = [
+  'companyNumber', 'regulatoryBody', 'regulatoryNumber', 'vatNumber', 'website',
+  'description', 'contactFirstName', 'contactLastName', 'addressLine2', 'county',
+  'notes', 'photoUrl',
+] as const;
+
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Company.name) private companyModel: Model<CompanyDocument>,
@@ -21,6 +66,10 @@ export class AdminService {
     @InjectModel(Enquiry.name) private enquiryModel: Model<EnquiryDocument>,
     @InjectModel(Case.name) private caseModel: Model<CaseDocument>,
     @InjectModel(Settings.name) private settingsModel: Model<SettingsDocument>,
+    private s3Service: S3Service,
+    private config: ConfigService,
+    private authService: AuthService,
+    private mailService: MailService,
   ) {}
 
 
@@ -233,21 +282,167 @@ export class AdminService {
   // ---------------- Companies -----------------
   async listCompanies(limit = 50, page = 1) {
     const skip = (page - 1) * limit;
-    const docs = await this.companyModel.find().skip(skip).limit(limit).lean().exec();
+    const docs = await this.companyModel
+      .find()
+      .populate('createdBy', 'firstName lastName email')
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec();
     const total = await this.companyModel.countDocuments().exec();
     return { total, docs };
   }
 
   async getCompanyById(id: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid company id');
-    const doc = await this.companyModel.findById(id).lean().exec();
+    const doc = await this.companyModel
+      .findById(id)
+      .populate('createdBy', 'firstName lastName email')
+      .lean()
+      .exec();
     if (!doc) throw new NotFoundException('Company not found');
     return doc;
   }
 
-  async createCompany(payload: Partial<Company>) {
-    const doc = new this.companyModel(payload);
+  /** Trims the form values and splits them into fields to set and fields to clear. */
+  private buildCompanyFields(dto: CreateCompanyDto) {
+    const set: Record<string, string> = {};
+    const unset: Record<string, ''> = {};
+
+    for (const key of COMPANY_REQUIRED_FIELDS) set[key] = String(dto[key]).trim();
+    for (const key of COMPANY_OPTIONAL_FIELDS) {
+      const value = dto[key]?.trim();
+      if (value) set[key] = value;
+      else unset[key] = '';
+    }
+
+    set.address = [set.addressLine1, set.addressLine2, set.city, set.county, set.postcode, set.country]
+      .filter(Boolean)
+      .join(', ');
+    return { set, unset };
+  }
+
+  async createCompany(payload: CreateCompanyDto, actorId: string) {
+    const { set } = this.buildCompanyFields(payload);
+    const doc = new this.companyModel({
+      ...set,
+      createdBy: Types.ObjectId.isValid(String(actorId)) ? new Types.ObjectId(String(actorId)) : undefined,
+    });
     return doc.save();
+  }
+
+  async updateCompany(id: string, payload: CreateCompanyDto) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid company id');
+    const { set, unset } = this.buildCompanyFields(payload);
+    const updated = await this.companyModel
+      .findByIdAndUpdate(
+        id,
+        { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) },
+        { new: true, runValidators: true },
+      )
+      .populate('createdBy', 'firstName lastName email')
+      .lean()
+      .exec();
+    if (!updated) throw new NotFoundException('Company not found');
+    return updated;
+  }
+
+  // ---------------- Stored documents (companies and lawyers) -----------------
+  private async addStoredDocument(
+    model: Model<any>,
+    folder: string,
+    categories: readonly string[],
+    ownerId: string,
+    file: Express.Multer.File | undefined,
+    dto: { title: string; category: string; issueDate?: string; expiryDate?: string; notes?: string },
+    actorId: string,
+  ) {
+    if (!Types.ObjectId.isValid(ownerId)) throw new BadRequestException('Invalid id');
+    if (!file) throw new BadRequestException('A file is required');
+    if (file.size > MAX_COMPANY_FILE_BYTES) throw new BadRequestException('File is larger than 10 MB');
+    if (!categories.includes(dto.category)) throw new BadRequestException('Invalid document category');
+
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mimeType = COMPANY_FILE_TYPES[ext];
+    if (!mimeType) {
+      throw new BadRequestException('Unsupported file type. Upload a PDF, Word document, PNG or JPG');
+    }
+
+    const issueDate = dto.issueDate ? new Date(dto.issueDate) : undefined;
+    const expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : undefined;
+    if (issueDate && expiryDate && expiryDate < issueDate) {
+      throw new BadRequestException('Expiry date cannot be before the issue date');
+    }
+
+    if (!(await model.exists({ _id: ownerId }))) throw new NotFoundException('Record not found');
+
+    const fileName = path.basename(file.originalname).slice(0, 200);
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileKey = `${folder}/${ownerId}/${randomUUID()}-${safeName}`;
+    await this.s3Service.putToBucket(file.buffer, fileKey, mimeType);
+
+    const entry = {
+      _id: new Types.ObjectId(),
+      title: dto.title.trim(),
+      category: dto.category,
+      fileName,
+      fileKey,
+      mimeType,
+      fileSize: file.size,
+      issueDate,
+      expiryDate,
+      notes: dto.notes?.trim() || undefined,
+      uploadedBy: Types.ObjectId.isValid(String(actorId)) ? new Types.ObjectId(String(actorId)) : undefined,
+      createdAt: new Date(),
+    };
+    const result = await model.updateOne({ _id: ownerId }, { $push: { documents: entry } }).exec();
+    if (!result.matchedCount) {
+      // The record was deleted between the check and the write; don't leave the file behind.
+      await this.s3Service.deleteFromBucket(fileKey).catch(() => undefined);
+      throw new NotFoundException('Record not found');
+    }
+    return entry;
+  }
+
+  private async findStoredDocument(model: Model<any>, ownerId: string, docId: string) {
+    if (!Types.ObjectId.isValid(ownerId) || !Types.ObjectId.isValid(docId)) {
+      throw new BadRequestException('Invalid id');
+    }
+    const owner: any = await model
+      .findOne({ _id: ownerId, 'documents._id': docId }, { 'documents.$': 1 })
+      .lean()
+      .exec();
+    const entry = owner?.documents?.[0];
+    if (!entry) throw new NotFoundException('Document not found');
+    return entry;
+  }
+
+  private async removeStoredDocument(model: Model<any>, ownerId: string, docId: string) {
+    const entry = await this.findStoredDocument(model, ownerId, docId);
+    await model.updateOne({ _id: ownerId }, { $pull: { documents: { _id: docId } } }).exec();
+    try {
+      await this.s3Service.deleteFromBucket(entry.fileKey);
+    } catch (err) {
+      // The record is already gone; an orphaned object is harmless, a failed request is not.
+      this.logger.warn(`Could not delete ${entry.fileKey} from S3: ${(err as Error).message}`);
+    }
+    return { success: true };
+  }
+
+  private async readStoredDocument(model: Model<any>, ownerId: string, docId: string) {
+    const entry = await this.findStoredDocument(model, ownerId, docId);
+    const buffer = await this.s3Service.getFromBucket(entry.fileKey);
+    return { buffer, fileName: entry.fileName as string, mimeType: (entry.mimeType as string) || 'application/octet-stream' };
+  }
+
+  addCompanyDocument(companyId: string, file: Express.Multer.File | undefined, dto: CreateCompanyDocumentDto, actorId: string) {
+    return this.addStoredDocument(this.companyModel, 'company-documents', COMPANY_FILE_CATEGORIES, companyId, file, dto, actorId);
+  }
+  deleteCompanyDocument(companyId: string, docId: string) {
+    return this.removeStoredDocument(this.companyModel, companyId, docId);
+  }
+  getCompanyDocumentFile(companyId: string, docId: string) {
+    return this.readStoredDocument(this.companyModel, companyId, docId);
   }
 
   async setCompanyVerified(id: string, verified: boolean, actorId: string) {
@@ -257,96 +452,301 @@ export class AdminService {
     return updated;
   }
 
+  addLawyerDocument(lawyerId: string, file: Express.Multer.File | undefined, dto: CreateLawyerDocumentDto, actorId: string) {
+    return this.addStoredDocument(this.lawyerModel, 'lawyer-documents', LAWYER_FILE_CATEGORIES, lawyerId, file, dto, actorId);
+  }
+  deleteLawyerDocument(lawyerId: string, docId: string) {
+    return this.removeStoredDocument(this.lawyerModel, lawyerId, docId);
+  }
+  getLawyerDocumentFile(lawyerId: string, docId: string) {
+    return this.readStoredDocument(this.lawyerModel, lawyerId, docId);
+  }
+
   // ---------------- Lawyers -----------------
+
+  /** Admin views of a lawyer also carry the documents and internal notes that queries hide by default. */
+  private lawyerAdminQuery<T>(query: T): T {
+    return (query as any)
+      .select('+documents +internalNotes')
+      .populate({ path: 'company', select: '-documents' })
+      .populate('createdById', 'firstName lastName email');
+  }
+
+  /** Adds each lawyer's portal account (status, last login) so the UI can show account and invitation state. */
+  private async withAccounts<T extends { user?: any; userId?: any }>(lawyers: T[]) {
+    const ids = lawyers.map((l) => l.user ?? l.userId).filter(Boolean);
+    const users = ids.length
+      ? await this.userModel.find({ _id: { $in: ids } }, 'email active emailVerified lastLoginAt').lean().exec()
+      : [];
+    const byId = new Map(users.map((u: any) => [String(u._id), u]));
+    return lawyers.map((l) => {
+      const u: any = byId.get(String(l.user ?? l.userId ?? ''));
+      return {
+        ...l,
+        account: u
+          ? { _id: u._id, email: u.email, active: u.active !== false, emailVerified: !!u.emailVerified, lastLoginAt: u.lastLoginAt ?? null }
+          : null,
+      };
+    });
+  }
+
   async listLawyers(limit = 50, page = 1) {
     const skip = (page - 1) * limit;
-    const docs = await this.lawyerModel.find().populate('company').skip(skip).limit(limit).lean().exec();
+    const docs = await this.lawyerAdminQuery(this.lawyerModel.find()).skip(skip).limit(limit).lean().exec();
     const total = await this.lawyerModel.countDocuments().exec();
-    return { total, docs };
+    return { total, docs: await this.withAccounts(docs as any[]) };
   }
 
   async getLawyerById(id: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
-    const doc = await this.lawyerModel.findById(id).populate('company').lean().exec();
+    const doc = await this.lawyerAdminQuery(this.lawyerModel.findById(id)).lean().exec();
     if (!doc) throw new NotFoundException('Lawyer not found');
-    return doc;
+    return (await this.withAccounts([doc as any]))[0];
+  }
+
+  private async assertCompanyExists(company: string) {
+    if (!Types.ObjectId.isValid(String(company))) throw new BadRequestException('Valid company id required');
+    const companyId = new Types.ObjectId(company);
+    const found: any = await this.companyModel.findById(companyId, 'name').lean().exec();
+    if (!found) throw new BadRequestException('Company not found');
+    return { companyId, companyName: found.name as string };
+  }
+
+  /** Trims the form values and splits them into fields to set and fields to clear. */
+  private buildLawyerFields(dto: CreateLawyerDto, current?: any) {
+    const set: Record<string, any> = {};
+    const unset: Record<string, ''> = {};
+    const put = (key: string, value: string | undefined, mirror?: string) => {
+      const v = value?.trim();
+      for (const k of mirror ? [key, mirror] : [key]) {
+        if (v) set[k] = v;
+        else unset[k] = '';
+      }
+    };
+
+    const firstName = dto.firstName.trim();
+    const lastName = dto.lastName.trim();
+    const middleName = dto.middleName?.trim();
+    set.firstName = firstName;
+    set.lastName = lastName;
+    set.name = [firstName, middleName, lastName].filter(Boolean).join(' ');
+    set.jobTitle = dto.jobTitle.trim();
+    set.workEmail = dto.workEmail.trim().toLowerCase();
+    set.directEmail = set.workEmail; // read by older code (e.g. the login-account helper)
+
+    put('middleName', dto.middleName);
+    put('officeBranch', dto.officeBranch);
+    put('regulatoryBody', dto.regulatoryBody);
+    put('registrationNumber', dto.registrationNumber, 'barNumber');
+    put('practisingStatus', dto.practisingStatus);
+    put('jurisdiction', dto.jurisdiction);
+    put('qualifications', dto.qualifications);
+    put('priceText', dto.priceText);
+    put('workPhone', dto.workPhone, 'directPhone');
+    put('mobilePhone', dto.mobilePhone);
+    put('internalNotes', dto.internalNotes);
+
+    // Active / Inactive maps onto the existing availability status. An archived
+    // lawyer stays archived unless the admin sets them Active again.
+    if (dto.lawyerStatus === 'active') set.status = 'available';
+    else if (current?.status !== 'archived') set.status = 'unavailable';
+
+    // The public email follows the work email unless an admin set a different one.
+    const previousWork = current?.workEmail ?? current?.directEmail;
+    if (!current?.publicEmail || current.publicEmail === previousWork) set.publicEmail = set.workEmail;
+
+    return { set, unset };
+  }
+
+  private async findLawyerUser(lawyer: any) {
+    const linked = lawyer.user ?? lawyer.userId;
+    if (linked) {
+      const user = await this.userModel.findById(linked).exec();
+      if (user) return user;
+    }
+    return this.userModel.findOne({ lawyerProfile: lawyer._id }).exec();
+  }
+
+  private duplicateEmailError(email: string) {
+    return new BadRequestException(`A user account with email "${email}" already exists`);
+  }
+
+  private async insertLawyerUser(dto: CreateLawyerDto, lawyerId: Types.ObjectId) {
+    const email = dto.workEmail.trim().toLowerCase();
+    if (!dto.password) {
+      throw new BadRequestException("A password is required to create the lawyer's portal account");
+    }
+    if (await this.userModel.exists({ email })) throw this.duplicateEmailError(email);
+    try {
+      return await this.userModel.create({
+        email,
+        passwordHash: await bcrypt.hash(dto.password, 10),
+        firstName: dto.firstName.trim(),
+        middleName: dto.middleName?.trim() || null,
+        lastName: dto.lastName.trim(),
+        phone: dto.mobilePhone?.trim() || dto.workPhone?.trim() || null,
+        role: 'lawyer',
+        emailVerified: true, // admin-created accounts are pre-verified
+        acceptedTerms: true,
+        active: dto.accountStatus === 'active',
+        lawyerProfile: lawyerId,
+      });
+    } catch (err: any) {
+      if (err?.code === 11000) throw this.duplicateEmailError(email);
+      throw err;
+    }
+  }
+
+  /** Sends the welcome email (sign-in link + one-time password link) and records the invitation. */
+  private async sendLawyerWelcomeEmail(lawyerId: Types.ObjectId, user: any, name: string, companyName: string) {
+    try {
+      const hours = Number(this.config.get('INVITE_TOKEN_EXPIRY_HOURS') || 72);
+      const setPasswordUrl = await this.authService.createPasswordSetupLink(user, hours);
+      const baseUrl = String(this.config.get('APP_BASE_URL') || this.config.get('FRONTEND_URL') || '').replace(/\/+$/, '');
+      await this.mailService.sendLawyerWelcome(user.email, {
+        name,
+        companyName,
+        loginUrl: `${baseUrl}/login`,
+        setPasswordUrl,
+        expiryHours: hours,
+      });
+      await this.lawyerModel
+        .updateOne({ _id: lawyerId }, { $set: { invitationStatus: 'sent', invitationSentAt: new Date() } })
+        .exec();
+      return { requested: true, sent: true };
+    } catch (err) {
+      this.logger.error(`Welcome email to ${user.email} failed: ${(err as Error).message}`);
+      return { requested: true, sent: false, error: 'The welcome email could not be sent.' };
+    }
   }
 
   /**
-   * Create a lawyer profile AND its associated login account (User with role=lawyer).
-   * The account is created pre-verified so the lawyer can log in immediately.
-   * Both the Lawyer document and the User document are cross-linked via
-   * `userId` on the Lawyer and `lawyerProfile` on the User.
+   * Create a lawyer profile AND its login account (User with role=lawyer).
+   * The account is pre-verified; the email and password are required.
+   * Both documents are cross-linked (Lawyer.user / userId, User.lawyerProfile).
    */
-  async createLawyer(payload: CreateLawyerDto) {
-    // validate company id string
-    if (!payload.company || !Types.ObjectId.isValid(String(payload.company))) {
-      throw new BadRequestException('Valid company id required');
+  async createLawyer(payload: CreateLawyerDto, actorId: string) {
+    const { companyId, companyName } = await this.assertCompanyExists(payload.company);
+    const lawyerId = new Types.ObjectId();
+    const user = await this.insertLawyerUser(payload, lawyerId);
+
+    const { set } = this.buildLawyerFields(payload);
+    try {
+      await this.lawyerModel.create({
+        ...set,
+        _id: lawyerId,
+        externalId: `LAW-${randomUUID().slice(0, 8).toUpperCase()}`,
+        company: companyId,
+        user: user._id,
+        userId: user._id,
+        createdBy: 'admin',
+        createdById: Types.ObjectId.isValid(String(actorId)) ? new Types.ObjectId(String(actorId)) : undefined,
+      });
+    } catch (err) {
+      await this.userModel.deleteOne({ _id: user._id }).exec(); // no login without a profile
+      throw err;
     }
 
-    const companyId = new Types.ObjectId(payload.company);
+    const welcomeEmail = payload.sendWelcomeEmail
+      ? await this.sendLawyerWelcomeEmail(lawyerId, user, set.name, companyName)
+      : { requested: false, sent: false };
+    return { lawyer: await this.getLawyerById(String(lawyerId)), welcomeEmail };
+  }
 
-    // ensure company exists
-    const companyExists = await this.companyModel.exists({ _id: companyId });
-    if (!companyExists) {
-      throw new BadRequestException('Company not found');
+  async updateLawyer(id: string, payload: CreateLawyerDto) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
+    const current: any = await this.lawyerModel.findById(id).lean().exec();
+    if (!current) throw new NotFoundException('Lawyer not found');
+
+    const { companyId, companyName } = await this.assertCompanyExists(payload.company);
+    const email = payload.workEmail.trim().toLowerCase();
+    let user: any = await this.findLawyerUser(current);
+
+    const link: Record<string, any> = {};
+    if (!user) {
+      // A profile that has no login yet gets one now, so the password is required here.
+      user = await this.insertLawyerUser(payload, current._id);
+      link.user = user._id;
+      link.userId = user._id;
+    } else {
+      if (email !== user.email && (await this.userModel.exists({ email, _id: { $ne: user._id } }))) {
+        throw this.duplicateEmailError(email);
+      }
+      const userSet: Record<string, any> = {
+        email,
+        firstName: payload.firstName.trim(),
+        middleName: payload.middleName?.trim() || null,
+        lastName: payload.lastName.trim(),
+        phone: payload.mobilePhone?.trim() || payload.workPhone?.trim() || null,
+        active: payload.accountStatus === 'active',
+      };
+      if (payload.password) {
+        userSet.passwordHash = await bcrypt.hash(payload.password, 10);
+        // A new password retires any pending "choose a password" link.
+        userSet.resetPasswordToken = null;
+        userSet.resetPasswordExpires = null;
+      }
+      try {
+        await this.userModel.updateOne({ _id: user._id }, { $set: userSet }).exec();
+      } catch (err: any) {
+        if (err?.code === 11000) throw this.duplicateEmailError(email);
+        throw err;
+      }
+      user.email = email;
     }
 
-    const normalizedLoginEmail = payload.loginEmail?.toLowerCase?.()?.trim();
-    if (!normalizedLoginEmail) throw new BadRequestException('loginEmail is required');
+    const { set, unset } = this.buildLawyerFields(payload, current);
+    // The form's internal notes replace the older free-text notes.
+    unset.notes = '';
+    await this.lawyerModel
+      .updateOne(
+        { _id: id },
+        { $set: { ...set, ...link, company: companyId }, $unset: unset },
+        { runValidators: true },
+      )
+      .exec();
 
-    // check email uniqueness
-    const existingUser = await this.userModel.findOne({ email: normalizedLoginEmail }).lean().exec();
-    if (existingUser) {
-      throw new BadRequestException(`A user account with email "${normalizedLoginEmail}" already exists`);
-    }
+    const welcomeEmail = payload.sendWelcomeEmail
+      ? await this.sendLawyerWelcomeEmail(current._id, user, set.name, companyName)
+      : { requested: false, sent: false };
+    return { lawyer: await this.getLawyerById(id), welcomeEmail };
+  }
 
-    const externalId = payload.externalId?.trim() || `LAW-${Date.now().toString().slice(-6)}`;
+  // ---------------- Lawyer photo -----------------
+  async setLawyerPhoto(id: string, file: Express.Multer.File | undefined) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
+    if (!file) throw new BadRequestException('A photo is required');
+    if (file.size > MAX_LAWYER_PHOTO_BYTES) throw new BadRequestException('Photo is larger than 5 MB');
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mimeType = LAWYER_PHOTO_TYPES[ext];
+    if (!mimeType) throw new BadRequestException('Unsupported image type. Upload a PNG, JPG or WebP');
 
-    // Step 1: Create the Lawyer profile document first (without userId)
-    const docPayload: Partial<Lawyer> = {
-      externalId,
-      name: payload.name,
-      priceText: payload.priceText,
-      avatarUrl: payload.avatarUrl,
-      company: companyId,
-      publicEmail: payload.publicEmail,
-      publicPhone: payload.publicPhone,
-      directEmail: payload.directEmail,
-      directPhone: payload.directPhone,
-      website: payload.website,
-      profileLink: payload.profileLink,
-      address: payload.address,
-      barNumber: payload.barNumber,
-      notes: payload.notes,
-    };
+    const current: any = await this.lawyerModel.findById(id, 'photoKey').lean().exec();
+    if (!current) throw new NotFoundException('Lawyer not found');
 
-    const lawyerDoc = await new this.lawyerModel(docPayload).save();
+    const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+    const photoKey = `lawyer-photos/${id}/${randomUUID()}-${safeName}`;
+    await this.s3Service.putToBucket(file.buffer, photoKey, mimeType);
+    await this.lawyerModel.updateOne({ _id: id }, { $set: { photoKey, photoMimeType: mimeType } }).exec();
+    if (current.photoKey) await this.s3Service.deleteFromBucket(current.photoKey).catch(() => undefined);
+    return { photoKey };
+  }
 
-    // Step 2: Hash the password and create the User account
-    const passwordHash = await bcrypt.hash(payload.password, 10);
+  async removeLawyerPhoto(id: string) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
+    const current: any = await this.lawyerModel.findById(id, 'photoKey').lean().exec();
+    if (!current) throw new NotFoundException('Lawyer not found');
+    await this.lawyerModel.updateOne({ _id: id }, { $unset: { photoKey: '', photoMimeType: '' } }).exec();
+    if (current.photoKey) await this.s3Service.deleteFromBucket(current.photoKey).catch(() => undefined);
+    return { success: true };
+  }
 
-    // Parse first/last from full name for the user record
-    const nameParts = payload.name.trim().split(' ');
-    const firstName = nameParts[0] || payload.name;
-    const lastName = nameParts.slice(1).join(' ') || undefined;
-
-    const userDoc = await new this.userModel({
-      email: normalizedLoginEmail,
-      passwordHash,
-      firstName,
-      lastName: lastName || null,
-      role: 'lawyer',
-      emailVerified: true,          // admin-created accounts are pre-verified
-      acceptedTerms: true,
-      lawyerProfile: lawyerDoc._id,
-    }).save();
-
-    // Step 3: Cross-link userId back onto the Lawyer document
-    lawyerDoc.userId = (userDoc as any)._id;
-    await (lawyerDoc as any).save();
-
-    return { lawyer: lawyerDoc, user: { _id: userDoc._id, email: userDoc.email, role: userDoc.role } };
+  async getLawyerPhoto(id: string) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
+    const current: any = await this.lawyerModel.findById(id, 'photoKey photoMimeType').lean().exec();
+    if (!current?.photoKey) throw new NotFoundException('No photo');
+    const buffer = await this.s3Service.getFromBucket(current.photoKey);
+    return { buffer, mimeType: (current.photoMimeType as string) || 'application/octet-stream' };
   }
 
   async setLawyerVerified(id: string, verified: boolean, actorId: string) {

@@ -22,6 +22,7 @@ import { PartnerLinkConflictOutcome } from './schemas/partner_invite.schema';
 
 import { CreateCaseDto } from './dto/create-case.dto';
 import { RemovePartnerDto } from './dto/remove-partner.dto';
+import { DeleteInviteeAccountDto } from './dto/delete-invitee-account.dto';
 import { ResolvePartnerConflictDto } from './dto/resolve-partner-conflict.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
@@ -85,7 +86,7 @@ export class CasesController {
     const title = body.title;
 
     return this.casesService.startCase(
-      user.id,
+      (user.id ?? user._id).toString(),
       title,
     );
   }
@@ -123,7 +124,7 @@ export class CasesController {
     @Req() req: any,
     @Param('id') id: string,
   ) {
-    this.ensureUser(req);
+    const user = this.ensureUser(req);
 
     const c =
       await this.casesService.findById(
@@ -136,6 +137,9 @@ export class CasesController {
         'Case not found',
       );
     }
+
+    // Staff, the owner, the partner and the assigned lawyers only.
+    await this.casesService.assertCanViewCase(c, user);
 
     const doc: any = (c as any).toObject ? (c as any).toObject() : c;
     try {
@@ -153,7 +157,14 @@ export class CasesController {
     @Req() req: any,
     @Param('id') id: string,
   ) {
-    this.ensureUser(req);
+    const user = this.ensureUser(req);
+
+    const c = await this.casesService.findById(id);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+    await this.casesService.assertCanViewCase(c, user);
+
     return this.casesService.getCaseStages(id);
   }
 
@@ -169,16 +180,6 @@ export class CasesController {
     @Param('id') id: string,
     @Body() dto: InvitePartnerDto,
   ) {
-    console.log(
-      'RAW BODY:',
-      req.body,
-    );
-
-    console.log(
-      'DTO:',
-      dto,
-    );
-
     const user =
       this.ensureUser(req);
 
@@ -296,6 +297,36 @@ export class CasesController {
       id,
       { id: (user.id ?? user._id).toString(), role: user.role },
       dto?.reason,
+    );
+  }
+
+  // ============================================================
+  // DELETE THE INVITED PARTNER'S ACCOUNT (Case Manager / Admin)
+  // DELETE /cases/:id/invitee-account
+  //
+  // For a partner who already has an account that stops them joining through
+  // the invitation. The account is deactivated and its address freed, the
+  // partner is unlinked if they had joined, and a fresh invitation is emailed
+  // so they can register and join.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/invitee-account')
+  async deleteInviteeAccount(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: DeleteInviteeAccountDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.deleteInviteeAccount(
+      id,
+      { id: (user.id ?? user._id).toString(), role: user.role },
+      dto,
     );
   }
 
@@ -449,6 +480,14 @@ export class CasesController {
     const user =
       this.ensureUser(req);
 
+    // Nothing in the app calls this for a client; it is a staff correction.
+    // Letting any signed-in user mark any case paid would skip payment.
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException(
+        'Only a case manager or an admin can mark a case as paid',
+      );
+    }
+
     return this.casesService.markPaymentCompleted(
       id,
       user.id,
@@ -493,6 +532,7 @@ export class CasesController {
     @Body() body: any,
   ) {
     const user = this.ensureUser(req);
+    await this.assertOwnerOrStaff(id, user);
     return this.casesService.updateCase(id, body, user.id ?? user._id);
   }
 
@@ -504,7 +544,20 @@ export class CasesController {
     @Body() body: any,
   ) {
     const user = this.ensureUser(req);
+    await this.assertOwnerOrStaff(id, user);
     return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
+  // Changing a case's title or priority is for its owner and for staff.
+  private async assertOwnerOrStaff(caseId: string, user: any) {
+    const c = await this.casesService.findById(caseId);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+    const isOwner = c.owner?.toString() === (user.id ?? user._id)?.toString();
+    if (!isOwner && !this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
   }
 
   @UseGuards(JwtAuthGuard)
@@ -581,8 +634,11 @@ export class CasesController {
   @UseGuards(JwtAuthGuard)
   @Get(':id/status')
   async getStatus(
+    @Req() req: any,
     @Param('id') id: string,
   ) {
+    const user = this.ensureUser(req);
+
     const c =
       await this.casesService.findById(
         id,
@@ -591,6 +647,8 @@ export class CasesController {
     if (!c) {
       throw new NotFoundException('Case not found');
     }
+
+    await this.casesService.assertCanViewCase(c, user);
 
     return {
       workflowStatus: c.workflowStatus,

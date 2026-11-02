@@ -12,7 +12,10 @@ export class User {
   @Prop({ required: true, unique: true, lowercase: true })
   email!: string;
 
-  @Prop({ required: true })
+  // Credentials and tracking data are hidden from every query (and so from every
+  // populate that returns a user inside a case) unless asked for with +field.
+  // Only UsersService.findByEmail, which the sign-in and reset flows use, asks.
+  @Prop({ required: true, select: false })
   passwordHash!: string;
 
   @Prop({ type: String, default: null })
@@ -53,10 +56,10 @@ export class User {
   @Prop({ type: Types.ObjectId, ref: 'Case', default: null })
   inviteCaseId!: Types.ObjectId | null;
 
-  @Prop({ type: String, default: null })
+  @Prop({ type: String, default: null, select: false })
   resetPasswordToken!: string | null;
 
-  @Prop({ type: Date, default: null })
+  @Prop({ type: Date, default: null, select: false })
   resetPasswordExpires!: Date | null;
 
   @Prop({ type: String, default: null })
@@ -71,11 +74,32 @@ export class User {
   @Prop({ type: Boolean, default: false })
   emailVerified?: boolean;
 
-  @Prop({ type: String, default: null })
+  @Prop({ type: String, default: null, select: false })
   emailVerificationOtp?: string | null;
 
-  @Prop({ type: Date, default: null })
+  @Prop({ type: Date, default: null, select: false })
   emailVerificationOtpExpires?: Date | null;
+
+  /**
+   * Account on/off switch. `false` blocks sign-in and every authenticated
+   * request; accounts without the field count as active.
+   */
+  @Prop({ type: Boolean, default: true })
+  active?: boolean;
+
+  @Prop({ type: Date, default: null })
+  lastLoginAt?: Date | null;
+
+  /**
+   * Set when staff delete an account (see CasesService.deleteInviteeAccount).
+   * The record is kept for the audit trail; its email is aliased so the same
+   * address can register again, and the original is kept here.
+   */
+  @Prop({ type: Date, default: null })
+  deactivatedAt?: Date | null;
+
+  @Prop({ type: String, default: null })
+  originalEmail?: string | null;
 
   @Prop({ type: Boolean, default: false })
   paymentDone?: boolean;
@@ -95,19 +119,19 @@ export class User {
   // ── Location tracking ──────────────────────────────────────────────────────
 
   /** Raw IP captured at registration time */
-  @Prop({ type: String, default: null })
+  @Prop({ type: String, default: null, select: false })
   registrationIp?: string | null;
 
   /** Raw IP captured at the most-recent login / OTP-verify */
-  @Prop({ type: String, default: null })
+  @Prop({ type: String, default: null, select: false })
   lastLoginIp?: string | null;
 
   /** Resolved geo data captured at registration */
-  @Prop({ type: GeoLocationMongoSchema, default: null })
+  @Prop({ type: GeoLocationMongoSchema, default: null, select: false })
   registrationLocation?: GeoLocationSchema | null;
 
   /** Resolved geo data captured at the most-recent login / OTP-verify */
-  @Prop({ type: GeoLocationMongoSchema, default: null })
+  @Prop({ type: GeoLocationMongoSchema, default: null, select: false })
   lastLocation?: GeoLocationSchema | null;
   // For role "lawyer": the directory profile (Lawyer) this login belongs to.
   // Cases reference the profile in assignedLawyerP1/P2.

@@ -74,6 +74,13 @@ export class AuthController {
       throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
 
+    // Only reached with the right password, so this does not reveal which emails exist.
+    if (user.active === false) {
+      throw new UnauthorizedException('This account has been deactivated. Please contact support.');
+    }
+
+    void this.usersService.recordLogin((user._id as any).toString());
+
     // Capture login location (fire-and-forget)
     void this.locationService.capture(
       (user._id as any)?.toString?.() ?? String(user._id),

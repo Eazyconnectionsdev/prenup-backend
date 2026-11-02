@@ -18,6 +18,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
+import { Roles } from '../../common/roles.decorator';
+import { RolesGuard } from '../../common/roles.guard';
 
 import { CaseManagerService } from './case-manager.service';
 
@@ -28,7 +30,10 @@ import { CreateNoteDto } from './dto/create-note.dto';
 import { CreateVersionDto } from './dto/create-version.dto';
 
 @Controller('case-manager')
-@UseGuards(JwtAuthGuard)
+// Every route here acts on any case (list, approve, assign lawyers, return to
+// draft...), so the whole controller is staff-only, not just "logged in".
+@Roles('superadmin', 'admin', 'case_manager')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class CaseManagerController {
   constructor(
     private readonly caseManagerService: CaseManagerService,

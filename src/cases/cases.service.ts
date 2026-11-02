@@ -33,11 +33,15 @@ import {
   CaseAuditLog,
   CaseAuditLogDocument,
 } from './schemas/case_audit_logs.schema';
-import { PartnerLinkConflictOutcome } from './schemas/partner_invite.schema';
+import {
+  PartnerInviteStatus,
+  PartnerLinkConflictOutcome,
+} from './schemas/partner_invite.schema';
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { PartnerInviteService } from './partner-invite.service';
 import { generateCaseNumber } from '../utils/case-number.util';
+import { canViewCase } from './case-access.util';
 
 // Deliberately vague: it must not reveal whether the address has an account
 // or who it is linked to.
@@ -60,6 +64,16 @@ export class CasesService {
   ) { }
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
+  }
+
+  // Who may read a case: staff, its owner and partner, and the lawyers assigned
+  // to it. Works on a populated or an unpopulated case.
+  async assertCanViewCase(
+    c: { owner?: any; invitedUser?: any; assignedLawyerP1?: any; assignedLawyerP2?: any },
+    actor: { id?: any; _id?: any; role?: string },
+  ): Promise<void> {
+    const allowed = await canViewCase({ user: this.userModel, lawyer: this.lawyerModel }, c, actor);
+    if (!allowed) throw new ForbiddenException('Forbidden');
   }
 
   private readonly STEP_MAP = {
@@ -266,7 +280,10 @@ export class CasesService {
   // Starts a new legal matter for the signed-in client and issues its Case ID.
   // Idempotent: a client with a current case gets that one back, so a retry
   // or a double click can never produce a second Case ID.
-  async startCase(userId: string, title?: string): Promise<CaseDocument> {
+  async startCase(userIdIn: string, title?: string): Promise<CaseDocument> {
+    // Callers may hand over an ObjectId (req.user.id is one); every comparison
+    // below is against strings, so normalise once.
+    const userId = String(userIdIn);
     if (!Types.ObjectId.isValid(userId)) {
       throw new BadRequestException('Invalid user id');
     }
@@ -917,6 +934,16 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
   // The inviter only learns that the link is waiting on a review: what the
   // invited person has on their own account is not theirs to see.
   async getInvite(caseId: string, forStaff = false) {
+    const result: any = await this.getInviteBase(caseId, forStaff);
+    // Staff also learn whether the invited person already has an account, and
+    // whether it can be deleted so they can register through the invitation.
+    if (forStaff && result) {
+      result.inviteeAccount = await this.describeInviteeAccount(caseId);
+    }
+    return result;
+  }
+
+  private async getInviteBase(caseId: string, forStaff: boolean) {
     const result: any = await this.partnerInvites.getForCase(caseId);
     const conflict = result?.invite?.conflict;
     if (!conflict) return result;
@@ -1152,6 +1179,12 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
 
     const isOwner = c.owner?.toString() === actorId.toString();
     const isInvited = c.invitedUser?.toString() === actorId.toString();
+
+    // Only the couple and staff write to a case; without this any signed-in
+    // user could fill in (and mark as submitted) someone else's questionnaire.
+    if (!isPrivileged && !isOwner && !isInvited) {
+      throw new ForbiddenException('Forbidden');
+    }
 
     // A locked section is read-only for the couple, whichever form it came
     // from: once both partners confirm, the case belongs to the case manager.
@@ -1949,6 +1982,7 @@ ${taskLines.join('\n\n')}`;
     caseId: string,
     actor: { id: string; role?: string },
     reason?: string,
+    opts: { notify?: boolean } = {},
   ) {
     if (!Types.ObjectId.isValid(caseId)) {
       throw new BadRequestException('Invalid case id');
@@ -1997,6 +2031,16 @@ ${taskLines.join('\n\n')}`;
     await this.createQuestionnaireBackup(caseId, actor.id);
     await this.clearPartnerFromCase(caseId);
 
+    // Past the early stages the case holds work that depended on this partner
+    // (joint answers, approvals, lawyer assignments, locks). Leaving it where
+    // it was would strand the next partner in a locked, half-finished case.
+    const previousStatus = c.workflowStatus;
+    const returnedToDraft = ![
+      CaseWorkflowStatus.NOT_PAID,
+      CaseWorkflowStatus.DRAFT,
+    ].includes(previousStatus);
+    if (returnedToDraft) await this.returnCaseToDraft(c, actor.id);
+
     await this.userModel.updateOne(
       { _id: partnerId, inviteCaseId: c._id },
       { $set: { endUserType: 'user1', invitedBy: null, inviteCaseId: null } },
@@ -2023,18 +2067,322 @@ ${taskLines.join('\n\n')}`;
               console.error('Failed to send partner removal email', err),
             )
         : Promise.resolve();
-    await Promise.all([
-      note(
-        partner?.email,
-        `Hi ${partner?.firstName || 'there'},\n\nYou have been removed from case ${caseLabel}. Your account has not been deleted. You can sign in at any time to start your own matter or accept a new invitation.\n\nLets Prenup`,
-      ),
-      note(
-        owner?.email,
-        `Hi ${owner?.firstName || 'there'},\n\nYour partner has been removed from case ${caseLabel}. You can now invite a partner again from your dashboard.\n\nLets Prenup`,
-      ),
-    ]);
+    if (opts.notify !== false) {
+      await Promise.all([
+        note(
+          partner?.email,
+          `Hi ${partner?.firstName || 'there'},\n\nYou have been removed from case ${caseLabel}. Your account has not been deleted. You can sign in at any time to start your own matter or accept a new invitation.\n\nLets Prenup`,
+        ),
+        note(
+          owner?.email,
+          `Hi ${owner?.firstName || 'there'},\n\nYour partner has been removed from case ${caseLabel}.${returnedToDraft ? ' The case has been returned to Draft so it can be completed again with a new partner.' : ''} You can now invite a partner again from your dashboard.\n\nLets Prenup`,
+        ),
+      ]);
+    }
 
-    return { message: 'Partner removed successfully' };
+    return {
+      message: 'Partner removed successfully',
+      returnedToDraft,
+      previousStatus,
+    };
+  }
+
+  // Puts a case back to Draft after its partner was removed: unlocks it and
+  // clears everything that needed both partners (joint answers, approvals,
+  // lawyer assignments). The owner's own answers, the payment and the Case ID
+  // are untouched; a snapshot was already taken by the caller.
+  private async returnCaseToDraft(c: CaseDocument, actorId: string) {
+    const sections = [
+      'myInformation',
+      'partnerInformation',
+      'jointInformation',
+      'independentLegalAdvice',
+    ];
+    const set: Record<string, any> = {
+      workflowStatus: CaseWorkflowStatus.DRAFT,
+      cmApproved: false,
+      cmApprovedAt: null,
+      cmApprovedBy: null,
+      cmReturnReason: 'The partner was removed, so the case was returned to Draft.',
+      fullyLocked: false,
+      fullyLockedBy: null,
+      fullyLockedAt: null,
+      assignedLawyerP1: null,
+      assignedLawyerP2: null,
+      lawyersAssignedAt: null,
+      lawyersAssignedBy: null,
+      'preQuestionnaireUser1.locked': false,
+      'approval.user1Approved': false,
+      'approval.user1ApprovedAt': null,
+      'approval.p1ReviewStatus': PartnerReviewStatus.IN_PROGRESS,
+      'approval.mutualApprovalAndSnapshot': MutualApprovalStatus.PENDING,
+      'approval.mutualApprovalCompletedAt': null,
+      'approval.snapshotData': null,
+      'approval.disapprovedBy': null,
+      'approval.disapprovedAt': null,
+      'approval.disapprovalReason': null,
+      'approval.lawyerApproved': false,
+      'approval.lawyerApprovedAt': null,
+      'approval.approvedLawyer': null,
+      'approval.caseManagerApproved': false,
+      'approval.caseManagerApprovedAt': null,
+      'approval.approvedBy': null,
+    };
+    for (const s of sections) {
+      set[`status.${s}.locked`] = false;
+      set[`status.${s}.lockedBy`] = null;
+      set[`status.${s}.lockedAt`] = null;
+    }
+    // Joint work and legal advice needed both people.
+    for (const s of ['jointInformation', 'independentLegalAdvice']) {
+      set[`status.${s}.submitted`] = false;
+      set[`status.${s}.submittedBy`] = null;
+      set[`status.${s}.submittedAt`] = null;
+    }
+
+    await this.caseModel.updateOne({ _id: c._id }, { $set: set });
+    await this.audit(
+      c._id,
+      actorId,
+      'CASE_RETURNED_TO_DRAFT',
+      'The partner was removed',
+      {
+        oldValue: {
+          workflowStatus: c.workflowStatus,
+          assignedLawyerP1: c.assignedLawyerP1 ?? null,
+          assignedLawyerP2: c.assignedLawyerP2 ?? null,
+        },
+        newValue: { workflowStatus: CaseWorkflowStatus.DRAFT },
+      },
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // Deleting the invited partner's account (staff only)
+  // ---------------------------------------------------------------------
+
+  // The account behind the invited partner: the person who joined, or the
+  // account that owns the address a still-open invitation was sent to.
+  private async findInviteeAccount(c: CaseDocument) {
+    if (c.invitedUser) {
+      const user = await this.userModel.findById(c.invitedUser);
+      return { user, joined: true };
+    }
+    const invite = await this.partnerInvites.latest(c._id);
+    const open =
+      invite &&
+      [
+        PartnerInviteStatus.PENDING,
+        PartnerInviteStatus.OPENED,
+        PartnerInviteStatus.EXPIRED,
+      ].includes(invite.status);
+    if (!open) return { user: null, joined: false };
+    const user = await this.userModel.findOne({
+      email: invite.invitee.email,
+      active: { $ne: false },
+    });
+    return { user, joined: false };
+  }
+
+  // Reasons an account must not be deleted by this action. Anything holding
+  // data, money or another couple is left for a person to resolve.
+  private async accountDeletionBlockers(c: CaseDocument, user: UserDocument) {
+    const blockers: { code: string; message: string; reasons?: string[]; cases?: string[] }[] = [];
+
+    if (user.role !== 'end_user') {
+      blockers.push({ code: 'NOT_A_CLIENT', message: 'This is not a client account, so it cannot be deleted here.' });
+    }
+    if (String(user._id) === String(c.owner)) {
+      blockers.push({ code: 'IS_OWNER', message: "This is the case owner's account, so it cannot be deleted here." });
+    }
+
+    const joinedElsewhere = await this.caseModel.exists({
+      invitedUser: user._id,
+      _id: { $ne: c._id },
+    });
+    const ownsCouple = await this.caseModel.exists({
+      owner: user._id,
+      invitedUser: { $ne: null },
+      abandonedAt: null,
+      _id: { $ne: c._id },
+    });
+    if (joinedElsewhere || ownsCouple) {
+      blockers.push({
+        code: 'LINKED_ELSEWHERE',
+        message: "This account is part of another couple's case, so it cannot be deleted here.",
+      });
+    }
+
+    const own = await this.ownOpenCases(user, c._id);
+    const meaningful = own
+      .map((oc) => ({ oc, ...this.assessCase(oc, user) }))
+      .filter((a) => a.meaningful);
+    if (meaningful.length) {
+      blockers.push({
+        code: 'HAS_CASE_DATA',
+        message:
+          'This account has its own case with information or a payment. Review the link instead (approve or reject it); nothing is deleted automatically.',
+        reasons: [...new Set(meaningful.flatMap((a) => a.reasons))],
+        cases: meaningful.map((a) => a.oc.caseNumber ?? String(a.oc._id)),
+      });
+    }
+    return blockers;
+  }
+
+  // What staff see in the partner panel about the invited person's account.
+  async describeInviteeAccount(caseId: string) {
+    if (!Types.ObjectId.isValid(caseId)) return null;
+    const c = await this.caseModel.findById(caseId);
+    if (!c || this.isSetAside(c)) return null;
+
+    const { user, joined } = await this.findInviteeAccount(c);
+    if (!user) return null;
+
+    const blockers = await this.accountDeletionBlockers(c, user);
+    return {
+      exists: true,
+      joined,
+      email: user.email,
+      name: [user.firstName, user.lastName].filter(Boolean).join(' ') || null,
+      deletable: blockers.length === 0,
+      blockers,
+    };
+  }
+
+  // Staff delete the invited partner's account so that person can register
+  // through a fresh invitation and join. The record is deactivated and its
+  // email aliased (the convention in the deletion guide), never erased, so
+  // audit trails and the owner's case stay intact. Refused for any account
+  // that holds data, a payment or a place in another couple's case.
+  async deleteInviteeAccount(
+    caseId: string,
+    actor: { id: string; role?: string },
+    dto: { confirmEmail: string; reason?: string; resendInvite?: boolean },
+  ) {
+    if (!this.isPrivilegedRole(actor.role)) {
+      throw new ForbiddenException('Only a case manager or an admin can delete a partner account');
+    }
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+    if (
+      this.isSetAside(c) ||
+      [CaseWorkflowStatus.COMPLETED, CaseWorkflowStatus.ARCHIVED].includes(c.workflowStatus)
+    ) {
+      throw new BadRequestException('The partner account cannot be deleted on a closed case');
+    }
+
+    const { user, joined } = await this.findInviteeAccount(c);
+    if (!user) {
+      throw new BadRequestException('No account exists for the invited partner');
+    }
+    if ((dto.confirmEmail ?? '').trim().toLowerCase() !== user.email.toLowerCase()) {
+      throw new BadRequestException('The email you typed does not match this account');
+    }
+
+    const blockers = await this.accountDeletionBlockers(c, user);
+    if (blockers.length) {
+      throw new ConflictException({
+        code: `ACCOUNT_${blockers[0].code}`,
+        message: blockers[0].message,
+        reasons: blockers[0].reasons,
+        cases: blockers[0].cases,
+      });
+    }
+
+    const reason = dto.reason?.trim() || undefined;
+    const originalEmail = user.email;
+    const invite = await this.partnerInvites.latest(c._id);
+    const invitee = invite?.invitee;
+
+    // 1. If they had joined, unlink them first (backup, reset, audit) without
+    //    the "your account was not deleted" email, which would now be untrue.
+    if (joined) {
+      await this.removePartner(caseId, actor, reason ?? 'Partner account deleted', { notify: false });
+    }
+
+    // 2. Their own unused draft is set aside (kept, with its Case ID).
+    const own = await this.ownOpenCases(user, c._id);
+    for (const oc of own) {
+      await this.setCaseAside(oc, actor.id, c._id, 'Account deleted by staff');
+    }
+
+    // 3. Deactivate and alias the account so the address is free to register again.
+    await this.userModel.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          active: false,
+          deactivatedAt: new Date(),
+          originalEmail,
+          email: `${originalEmail}__deactivated_${Date.now()}`,
+          resetPasswordToken: null,
+          resetPasswordExpires: null,
+          emailVerificationOtp: null,
+          emailVerificationOtpExpires: null,
+          inviteCaseId: null,
+          invitedBy: null,
+          invitedUser: null,
+        },
+      },
+    );
+
+    // 4. One partner per person: withdraw every other invitation to them or from them.
+    await this.partnerInvites.revokeOutstanding({
+      email: originalEmail,
+      ownCaseIds: own.map((o) => o._id),
+      exceptCaseId: c._id,
+    });
+
+    await this.audit(c._id, actor.id, 'PARTNER_ACCOUNT_DELETED', reason, {
+      oldValue: { partnerId: user._id, partnerEmail: originalEmail, wasLinked: joined },
+    });
+
+    // 5. A fresh invitation, so they can register and join. Because the address
+    //    no longer has an account it is a registration link.
+    let inviteSent = false;
+    let inviteError: string | undefined;
+    if (dto.resendInvite !== false && invitee?.email) {
+      try {
+        await this.invite(caseId, String(c.owner), {
+          firstName: invitee.firstName ?? '',
+          lastName: invitee.lastName ?? '',
+          email: invitee.email,
+          mobileNumber: invitee.mobileNumber ?? undefined,
+          relationshipStatus: invitee.relationshipStatus ?? undefined,
+          targetWeddingDate: invitee.targetWeddingDate ?? undefined,
+          personalMessage: invitee.personalMessage ?? undefined,
+        } as any);
+        inviteSent = true;
+      } catch (err) {
+        inviteError = (err as Error).message;
+        console.error('Failed to send a fresh partner invitation', err);
+      }
+    }
+
+    // 6. Tell the case owner what happened.
+    const owner = await this.userModel.findById(c.owner).select('email firstName').lean().exec();
+    if (owner?.email) {
+      const caseLabel = c.caseNumber ?? String(c._id);
+      await this.mailService
+        .sendMail(
+          owner.email,
+          `Update to case ${caseLabel}`,
+          `Hi ${owner.firstName || 'there'},\n\nOur team removed the account linked to your partner invitation (${originalEmail}).${inviteSent ? ` A fresh invitation has been sent to ${invitee?.email}, so your partner can register and join your case.` : ' You can invite your partner again from your dashboard.'}\n\nLets Prenup`,
+        )
+        .catch((err) => console.error('Failed to notify the owner about the account deletion', err));
+    }
+
+    return {
+      message: 'Partner account deleted',
+      accountDeleted: true,
+      wasLinked: joined,
+      setAsideCases: own.map((o) => o.caseNumber ?? String(o._id)),
+      inviteSent,
+      inviteError,
+    };
   }
 
   private ensureApprovalObj(c: CaseDocument) {
@@ -2508,6 +2856,21 @@ Lets Prenup
 
         workflowStatus:
           caseDoc.workflowStatus,
+
+        // Kept for the record (a revert restores only the fields above): what
+        // the case looked like before a partner was removed.
+        preQuestionnaireUser2:
+          caseDoc.preQuestionnaireUser2,
+        assignedLawyerP1:
+          caseDoc.assignedLawyerP1 ?? null,
+        assignedLawyerP2:
+          caseDoc.assignedLawyerP2 ?? null,
+        status:
+          (caseDoc as any).status,
+        approval:
+          caseDoc.approval,
+        fullyLocked:
+          caseDoc.fullyLocked ?? false,
       },
     });
 

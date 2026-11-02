@@ -219,8 +219,11 @@ export class AuthService {
     const issuedAt = user.resetPasswordExpires
       ? user.resetPasswordExpires.getTime() - expiryMs
       : 0;
+    // A link that outlives the standard window (an admin's welcome link) looks
+    // as if it was issued in the future; it must not block a fresh request.
     if (
       user.resetPasswordToken &&
+      issuedAt <= Date.now() &&
       Date.now() - issuedAt < AuthService.RESEND_COOLDOWN_MS
     ) {
       return;
@@ -247,6 +250,27 @@ export class AuthService {
     } catch (err) {
       this.logger.error('Failed to send password reset email', err as any);
     }
+  }
+
+  /**
+   * A one-time "choose your password" link for an account an admin created.
+   * The normal reset page consumes it, and only the digest is stored, as for
+   * reset links.
+   */
+  async createPasswordSetupLink(
+    user: { _id: { toString(): string }; email: string },
+    expiryHours: number,
+  ): Promise<string> {
+    const token = crypto.randomBytes(32).toString('hex');
+    await this.usersService.setResetToken(
+      user._id.toString(),
+      AuthService.hashResetToken(token),
+      new Date(Date.now() + expiryHours * 3600 * 1000),
+    );
+    const baseUrl = String(
+      this.config.get('APP_BASE_URL') || this.config.get('FRONTEND_URL') || '',
+    ).replace(/\/+$/, '');
+    return `${baseUrl}/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
   }
 
   /**

@@ -313,6 +313,32 @@ export class MailService implements OnModuleInit {
     return this.sendRaw({ to: email, subject, text, html });
   }
 
+  /**
+   * Welcome email for a lawyer account an admin created. It carries a sign-in
+   * link and a one-time link to choose a password; it never contains a password.
+   */
+  async sendLawyerWelcome(
+    to: string,
+    opts: { name: string; companyName?: string; loginUrl: string; setPasswordUrl: string; expiryHours: number },
+  ) {
+    const escape = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const validity = `The password link is valid for ${opts.expiryHours} hour${opts.expiryHours === 1 ? '' : 's'} and can only be used once.`;
+    const firm = opts.companyName ? ` for ${opts.companyName}` : '';
+    const subject = 'Welcome to Lets Prenup: your lawyer account is ready';
+    const text = `Hello ${opts.name},\n\nA Lets Prenup lawyer account has been created for you${firm}.\n\nSign in with this email address (${to}): ${opts.loginUrl}\n\nChoose your own password here: ${opts.setPasswordUrl}\n\n${validity}\n\nIf you were not expecting this, you can ignore this email.`;
+    const html = buildEmailHtml({
+      eyebrow: 'Welcome',
+      heading: 'Your Lawyer Account Is Ready',
+      icon: '⚖️',
+      body: `Hello ${escape(opts.name)},<br/><br/>A Lets Prenup lawyer account has been created for you${opts.companyName ? ` for <strong>${escape(opts.companyName)}</strong>` : ''}.<br/><br/>Sign in with this email address (<strong>${escape(to)}</strong>) at <a href="${escape(opts.loginUrl)}">${escape(opts.loginUrl)}</a>.<br/><br/>Use the button below to choose your own password. ${validity}`,
+      ctaLabel: 'Set Your Password',
+      ctaUrl: opts.setPasswordUrl,
+      footerNote: 'If you were not expecting this email, you can safely ignore it.',
+    });
+    return this.sendRaw({ to, subject, text, html });
+  }
+
   async sendFirstPhaseCompletedForCase(caseDoc: any) {
     if (!caseDoc) return;
     const caseId = getDisplayCaseId(caseDoc);

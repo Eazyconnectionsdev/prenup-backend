@@ -44,6 +44,23 @@ $ yarn run start:dev
 $ yarn run start:prod
 ```
 
+## Seeding test accounts
+
+On startup the API can recreate the QA accounts (2 admins, 3 case managers,
+3 companies with 2 lawyers each; list in `src/seed/seed-accounts.ts`) when the
+database has **no users at all**, e.g. after a wipe. It is off by default.
+
+| Variable | Meaning |
+| --- | --- |
+| `SEED_TEST_ACCOUNTS=true` | Turns the seed on. Anything else leaves it off. |
+| `SEED_ACCOUNTS_PASSWORD` | Password for every seeded account. Defaults to `prenup1234`. |
+
+It never runs while any user exists, so it cannot modify a populated database.
+The accounts include admins with one shared password: set a strong
+`SEED_ACCOUNTS_PASSWORD` on any public deployment, and remove the flag once the
+real admins exist. Restart the app after wiping the database; it only checks at
+startup.
+
 ## Run tests
 
 ```bash

@@ -10,12 +10,21 @@ import {
   Query,
   Patch,
   Put,
+  Delete,
+  Res,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors,
   BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
-import { AdminService } from './admin.service';
+import { AdminService, MAX_COMPANY_FILE_BYTES, MAX_LAWYER_PHOTO_BYTES } from './admin.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
+import { CreateCompanyDocumentDto } from './dto/create-company-document.dto';
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
+import { CreateLawyerDocumentDto } from './dto/create-lawyer-document.dto';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
 import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
 
@@ -183,7 +192,52 @@ export class AdminController {
   async createCompany(@Req() req, @Body() body: CreateCompanyDto) {
     const user = this.ensureUser(req);
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.createCompany(body);
+    return this.adminService.createCompany(body, user.id || user._id);
+  }
+
+  @Patch('companies/:id')
+  async updateCompany(@Req() req, @Param('id') id: string, @Body() body: CreateCompanyDto) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateCompany(id, body);
+  }
+
+  @Post('companies/:id/documents')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_COMPANY_FILE_BYTES } }))
+  async addCompanyDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: CreateCompanyDocumentDto,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.addCompanyDocument(id, file, body, user.id || user._id);
+  }
+
+  @Get('companies/:id/documents/:docId/download')
+  async downloadCompanyDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('docId') docId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    const file = await this.adminService.getCompanyDocumentFile(id, docId);
+    res.set({
+      'Content-Type': file.mimeType,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(file.buffer);
+  }
+
+  @Delete('companies/:id/documents/:docId')
+  async deleteCompanyDocument(@Req() req, @Param('id') id: string, @Param('docId') docId: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.deleteCompanyDocument(id, docId);
   }
 
   @Patch('companies/:id/verify')
@@ -212,7 +266,80 @@ export class AdminController {
   async createLawyer(@Req() req, @Body() body: CreateLawyerDto) {
     const user = this.ensureUser(req);
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.createLawyer(body);
+    return this.adminService.createLawyer(body, user.id || user._id);
+  }
+
+  @Patch('lawyers/:id')
+  async updateLawyer(@Req() req, @Param('id') id: string, @Body() body: CreateLawyerDto) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateLawyer(id, body);
+  }
+
+  @Post('lawyers/:id/photo')
+  @UseInterceptors(FileInterceptor('photo', { limits: { fileSize: MAX_LAWYER_PHOTO_BYTES } }))
+  async setLawyerPhoto(@Req() req, @Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.setLawyerPhoto(id, file);
+  }
+
+  @Get('lawyers/:id/photo')
+  async getLawyerPhoto(@Req() req, @Param('id') id: string, @Res({ passthrough: true }) res: Response) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    const photo = await this.adminService.getLawyerPhoto(id);
+    res.set({
+      'Content-Type': photo.mimeType,
+      'Cache-Control': 'private, max-age=300',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(photo.buffer);
+  }
+
+  @Delete('lawyers/:id/photo')
+  async removeLawyerPhoto(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.removeLawyerPhoto(id);
+  }
+
+  @Post('lawyers/:id/documents')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_COMPANY_FILE_BYTES } }))
+  async addLawyerDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: CreateLawyerDocumentDto,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.addLawyerDocument(id, file, body, user.id || user._id);
+  }
+
+  @Get('lawyers/:id/documents/:docId/download')
+  async downloadLawyerDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('docId') docId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    const file = await this.adminService.getLawyerDocumentFile(id, docId);
+    res.set({
+      'Content-Type': file.mimeType,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(file.buffer);
+  }
+
+  @Delete('lawyers/:id/documents/:docId')
+  async deleteLawyerDocument(@Req() req, @Param('id') id: string, @Param('docId') docId: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.deleteLawyerDocument(id, docId);
   }
 
   @Patch('lawyers/:id/verify')

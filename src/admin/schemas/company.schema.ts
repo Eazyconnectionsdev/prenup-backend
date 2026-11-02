@@ -1,38 +1,4 @@
-
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
-
-export type CompanyDocument = Company & Document;
-
-@Schema({ timestamps: true })
-export class Company {
-  @Prop({ required: true })
-  name: string;
-
-  @Prop()
-  companyNumber?: string;
-
-  @Prop()
-  address?: string;
-
-  @Prop()
-  email?: string;
-
-  @Prop()
-  phone?: string;
-
-  @Prop()
-  website?: string;
-
-  @Prop()
-  notes?: string;
-
-  @Prop()
-  photoUrl?: string;
-
-  @Prop({ default: false })
-  verified?: boolean;
-}
-
-export const CompanySchema = SchemaFactory.createForClass(Company);
-
+// The admin and cases modules share one "Company" model, and Mongoose keeps
+// whichever schema registers first. A second definition here would silently drop
+// fields, so this re-exports the cases schema instead of declaring its own.
+export * from '../../cases/schemas/company.schema';

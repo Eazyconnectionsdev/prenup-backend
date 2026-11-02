@@ -13,6 +13,7 @@ import { AgreementModule } from './agreement/agreement.module';
 import { AuditLogModule } from './common/audit-log/audit-log.module';
 import { CompaniesModule } from './cases/companies/companies.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { SeedModule } from './seed/seed.module';
 
 
 import { AppController } from './app.controller';
@@ -32,7 +33,8 @@ import { AppService } from './app.service';
     CaseManagerModule,
     CompaniesModule,
     LawyerModule,
-    AuditLogModule
+    AuditLogModule,
+    SeedModule
 
 
   ],
