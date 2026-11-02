@@ -10,14 +10,11 @@ import {
   Query,
   Patch,
   Put,
-  Delete,
   Res,
   StreamableFile,
   UploadedFile,
   UseInterceptors,
   BadRequestException,
-  UseInterceptors,
-  UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
@@ -189,7 +186,7 @@ export class AdminController {
   }
 
   // =============================================
-  // COMPANIES  (Section 2 – with attachments & notes)
+  // COMPANIES
   // =============================================
 
   @Get('companies')
@@ -269,75 +266,8 @@ export class AdminController {
     return this.adminService.setCompanyVerified(id, true, user.id || user._id);
   }
 
-  // -- Company Attachments --
-
-  @Post('companies/:id/attachments')
-  @UseInterceptors(FileInterceptor('file'))
-  async addCompanyAttachment(
-    @Req() req,
-    @Param('id') id: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Body('fileUrl') fileUrl: string,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    if (!file) throw new BadRequestException('File is required');
-    // fileUrl should be the S3/CDN URL returned after upload; if not provided fall back to originalname placeholder
-    const resolvedUrl = fileUrl || file.originalname;
-    return this.adminService.addCompanyAttachment(id, file, resolvedUrl, user.id || user._id);
-  }
-
-  @Get('companies/:id/attachments')
-  async getCompanyAttachments(@Req() req, @Param('id') id: string) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getCompanyAttachments(id);
-  }
-
-  @Delete('companies/:id/attachments/:attachmentId')
-  async deleteCompanyAttachment(
-    @Req() req,
-    @Param('id') id: string,
-    @Param('attachmentId') attachmentId: string,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.deleteCompanyAttachment(id, attachmentId);
-  }
-
-  // -- Company Notes --
-
-  @Post('companies/:id/notes')
-  async addCompanyNote(
-    @Req() req,
-    @Param('id') id: string,
-    @Body() body: AddCompanyNoteDto,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.addCompanyNote(id, body.content, user.id || user._id);
-  }
-
-  @Get('companies/:id/notes')
-  async getCompanyNotes(@Req() req, @Param('id') id: string) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getCompanyNotes(id);
-  }
-
-  @Delete('companies/:id/notes/:noteId')
-  async deleteCompanyNote(
-    @Req() req,
-    @Param('id') id: string,
-    @Param('noteId') noteId: string,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.deleteCompanyNote(id, noteId);
-  }
-
   // =============================================
-  // LAWYERS  (Section 2 – with attachments & notes)
+  // LAWYERS
   // =============================================
 
   @Get('lawyers')
