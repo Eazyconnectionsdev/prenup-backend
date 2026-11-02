@@ -9,6 +9,12 @@ import { ConfigService } from '@nestjs/config';
 import { Company, CompanyDocument, COMPANY_FILE_CATEGORIES } from './schemas/company.schema';
 import { Lawyer, LawyerDocument, LAWYER_FILE_CATEGORIES } from './schemas/lawyer.schema';
 import { Enquiry, EnquiryDocument } from './schemas/enquiry.schema';
+import { AdminSettings, AdminSettingsDocument } from './schemas/admin-settings.schema';
+import { CompanyAttachment, CompanyAttachmentDocument } from './schemas/company-attachment.schema';
+import { CompanyNote, CompanyNoteDocument } from './schemas/company-note.schema';
+import { LawyerAttachment, LawyerAttachmentDocument } from './schemas/lawyer-attachment.schema';
+import { LawyerNote, LawyerNoteDocument } from './schemas/lawyer-note.schema';
+
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
 import { CreateLawyerDocumentDto } from './dto/create-lawyer-document.dto';
 import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
@@ -254,22 +260,35 @@ export class AdminService {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid user id');
     const allowed = ['user', 'admin', 'superadmin', 'case_manager'];
     if (!allowed.includes(role)) throw new BadRequestException('Invalid role');
-    const updated = await this.userModel.findByIdAndUpdate(id, { role }, { new: true }).exec();
+    const updated = await this.userModel
+      .findByIdAndUpdate(id, { role }, { new: true })
+      .exec();
     if (!updated) throw new NotFoundException('User not found');
     return updated;
   }
 
   async deactivateUser(id: string, actorId: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid user id');
-    const updated = await this.userModel.findByIdAndUpdate(id, { active: false }, { new: true }).exec();
+    const updated = await this.userModel
+      .findByIdAndUpdate(id, { active: false }, { new: true })
+      .exec();
     if (!updated) throw new NotFoundException('User not found');
     return updated;
   }
 
-  // ---------------- Enquiries -----------------
+  // =============================================
+  // ENQUIRIES
+  // =============================================
+
   async listEnquiries(limit = 50, page = 1) {
     const skip = (page - 1) * limit;
-    const docs = await this.enquiryModel.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec();
+    const docs = await this.enquiryModel
+      .find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec();
     const total = await this.enquiryModel.countDocuments().exec();
     return { total, docs };
   }
@@ -279,7 +298,10 @@ export class AdminService {
     return doc.save();
   }
 
-  // ---------------- Companies -----------------
+  // =============================================
+  // COMPANIES (Section 2 – with attachments & notes)
+  // =============================================
+
   async listCompanies(limit = 50, page = 1) {
     const skip = (page - 1) * limit;
     const docs = await this.companyModel
@@ -447,7 +469,9 @@ export class AdminService {
 
   async setCompanyVerified(id: string, verified: boolean, actorId: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid company id');
-    const updated = await this.companyModel.findByIdAndUpdate(id, { verified }, { new: true }).exec();
+    const updated = await this.companyModel
+      .findByIdAndUpdate(id, { verified }, { new: true })
+      .exec();
     if (!updated) throw new NotFoundException('Company not found');
     return updated;
   }
@@ -751,14 +775,18 @@ export class AdminService {
 
   async setLawyerVerified(id: string, verified: boolean, actorId: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
-    const updated = await this.lawyerModel.findByIdAndUpdate(id, { verified }, { new: true }).exec();
+    const updated = await this.lawyerModel
+      .findByIdAndUpdate(id, { verified }, { new: true })
+      .exec();
     if (!updated) throw new NotFoundException('Lawyer not found');
     return updated;
   }
 
   async archiveLawyer(id: string, actorId: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid lawyer id');
-    const updated = await this.lawyerModel.findByIdAndUpdate(id, { status: 'archived' }, { new: true }).exec();
+    const updated = await this.lawyerModel
+      .findByIdAndUpdate(id, { status: 'archived' }, { new: true })
+      .exec();
     if (!updated) throw new NotFoundException('Lawyer not found');
     return updated;
   }
