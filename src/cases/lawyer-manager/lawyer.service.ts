@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
+import mongoose from 'mongoose';
+
 
 import {
   Model,
@@ -1294,6 +1296,12 @@ export class LawyerService {
   async caseOverview(
     caseId: string,
   ) {
+    if (!mongoose.isValidObjectId(caseId)) {
+      throw new BadRequestException(
+        `Invalid case ID: "${caseId}"`,
+      );
+    }
+
     const caseDoc =
       await this.caseModel
         .findById(caseId)
@@ -2225,6 +2233,39 @@ export class LawyerService {
   // COMPLETED CASES
   // =====================================================
 
+  // =====================================================
+  // MY CASES (active)
+  // =====================================================
+
+  async myCases(
+    userId: string,
+  ) {
+    const lawyerObjId =
+      new Types.ObjectId(userId);
+
+    return this.caseModel
+      .find({
+        workflowStatus: {
+          $nin: [
+            CaseWorkflowStatus.COMPLETED,
+            CaseWorkflowStatus.CANCELLED,
+            CaseWorkflowStatus.ARCHIVED,
+          ],
+        },
+
+        $or: [
+          { assignedLawyerP1: lawyerObjId },
+          { assignedLawyerP2: lawyerObjId },
+        ],
+      })
+      .populate('owner')
+      .populate('invitedUser')
+      .populate('assignedLawyerP1')
+      .populate('assignedLawyerP2')
+      .sort({ createdAt: -1 });
+  }
+
+  // =====================================================
   async completedCases(
     userId: string,
   ) {

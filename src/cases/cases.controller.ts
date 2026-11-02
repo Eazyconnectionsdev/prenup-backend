@@ -1,12 +1,14 @@
 // src/cases/cases.controller.ts
 import {
   Body,
+  Put,
+  Patch,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
   Post,
-  Put,
   Req,
   UseGuards,
   NotFoundException,
@@ -16,12 +18,16 @@ import {
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 
 import { CasesService } from './cases.service';
+import { PartnerLinkConflictOutcome } from './schemas/partner_invite.schema';
 
 import { CreateCaseDto } from './dto/create-case.dto';
+import { RemovePartnerDto } from './dto/remove-partner.dto';
+import { DeleteInviteeAccountDto } from './dto/delete-invitee-account.dto';
+import { ResolvePartnerConflictDto } from './dto/resolve-partner-conflict.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
-
-import { SaveOnboardingDto } from './dto/onboarding.dto';
+import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
+import { MatrimonialAgreementDto } from './dto/matrimonial-agreement.dto';
 
 // IMPORTANT:
 // Use the NEW unified LawyerService.
@@ -62,8 +68,11 @@ export class CasesController {
   }
 
   // ============================================================
-  // CREATE CASE
+  // START A LEGAL MATTER
   // POST /cases
+  //
+  // This is the only place a Case ID is issued for a client.
+  // Idempotent: a client who already has a current case gets it back.
   // ============================================================
 
   @UseGuards(JwtAuthGuard)
@@ -76,8 +85,8 @@ export class CasesController {
 
     const title = body.title;
 
-    return this.casesService.create(
-      user.id,
+    return this.casesService.startCase(
+      (user.id ?? user._id).toString(),
       title,
     );
   }
@@ -115,7 +124,7 @@ export class CasesController {
     @Req() req: any,
     @Param('id') id: string,
   ) {
-    this.ensureUser(req);
+    const user = this.ensureUser(req);
 
     const c =
       await this.casesService.findById(
@@ -129,7 +138,34 @@ export class CasesController {
       );
     }
 
-    return c;
+    // Staff, the owner, the partner and the assigned lawyers only.
+    await this.casesService.assertCanViewCase(c, user);
+
+    const doc: any = (c as any).toObject ? (c as any).toObject() : c;
+    try {
+      doc.stages = await this.casesService.getCaseStages(id);
+    } catch {
+      // stages optional fallback
+    }
+
+    return doc;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/stages')
+  async getStages(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    const c = await this.casesService.findById(id);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+    await this.casesService.assertCanViewCase(c, user);
+
+    return this.casesService.getCaseStages(id);
   }
 
   // ============================================================
@@ -144,16 +180,6 @@ export class CasesController {
     @Param('id') id: string,
     @Body() dto: InvitePartnerDto,
   ) {
-    console.log(
-      'RAW BODY:',
-      req.body,
-    );
-
-    console.log(
-      'DTO:',
-      dto,
-    );
-
     const user =
       this.ensureUser(req);
 
@@ -195,22 +221,140 @@ export class CasesController {
   }
 
   // ============================================================
-  // ATTACH INVITED USER
-  // POST /cases/:id/attach-invited
+  // ONBOARDING (user 1 / case owner only)
+  // GET  /cases/:id/onboarding
+  // POST /cases/:id/onboarding
   // ============================================================
 
   @UseGuards(JwtAuthGuard)
-  @Post(':id/attach-invited')
-  async attachInvitedUser(
+  @Get(':id/onboarding')
+  async getOnboarding(@Req() req: any, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    return this.casesService.getOnboarding(id, (user.id ?? user._id).toString());
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/onboarding')
+  async completeOnboarding(
     @Req() req: any,
     @Param('id') id: string,
+    @Body() dto: CompleteOnboardingDto,
   ) {
-    const user =
-      this.ensureUser(req);
-
-    return this.casesService.attachInvitedUser(
+    const user = this.ensureUser(req);
+    return this.casesService.completeOnboarding(
       id,
-      user.id,
+      (user.id ?? user._id).toString(),
+      dto,
+    );
+  }
+
+  // ============================================================
+  // GET INVITE STATUS (what was typed + who actually registered)
+  // GET /cases/:id/invite
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/invite')
+  async getInvite(@Req() req: any, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+
+    const c = await this.casesService.findById(id);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+
+    const userIdStr = (user.id ?? user._id)?.toString();
+    if (
+      !(this.isPrivilegedRole(user.role) || c.owner?.toString() === userIdStr)
+    ) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.getInvite(
+      id,
+      this.isPrivilegedRole(user.role),
+    );
+  }
+
+  // ============================================================
+  // REMOVE PARTNER
+  // DELETE /cases/:id/partner
+  //
+  // Case Manager / Admin (or the owner, early on) unlinks the partner so a
+  // partner can be invited again. The partner's account is kept.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/partner')
+  async removePartner(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: RemovePartnerDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.removePartner(
+      id,
+      { id: (user.id ?? user._id).toString(), role: user.role },
+      dto?.reason,
+    );
+  }
+
+  // ============================================================
+  // DELETE THE INVITED PARTNER'S ACCOUNT (Case Manager / Admin)
+  // DELETE /cases/:id/invitee-account
+  //
+  // For a partner who already has an account that stops them joining through
+  // the invitation. The account is deactivated and its address freed, the
+  // partner is unlinked if they had joined, and a fresh invitation is emailed
+  // so they can register and join.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/invitee-account')
+  async deleteInviteeAccount(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: DeleteInviteeAccountDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.deleteInviteeAccount(
+      id,
+      { id: (user.id ?? user._id).toString(), role: user.role },
+      dto,
+    );
+  }
+
+  // ============================================================
+  // RESOLVE A HELD PARTNER LINK (Case Manager / Admin)
+  // POST /cases/:id/invite/resolve
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/invite/resolve')
+  async resolvePartnerConflict(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: ResolvePartnerConflictDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.resolvePartnerConflict(
+      id,
+      (user.id ?? user._id).toString(),
+      dto.action === 'APPROVE'
+        ? PartnerLinkConflictOutcome.APPROVED
+        : PartnerLinkConflictOutcome.REJECTED,
+      dto.note,
     );
   }
 
@@ -234,6 +378,32 @@ export class CasesController {
       id,
       sectionName,
       user,
+    );
+  }
+
+  // ============================================================
+  // MATRIMONIAL AGREEMENT & INTENTIONS
+  // POST /cases/:id/questionnaire/matrimonial-agreement
+  //
+  // Declared before the generic step route below so this step gets validated
+  // against its DTO instead of being stored as a free-form body.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/questionnaire/matrimonial-agreement')
+  async updateMatrimonialAgreement(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: MatrimonialAgreementDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.updateQuestionnaireStep(
+      id,
+      'matrimonial-agreement',
+      body,
+      user.id ?? user._id,
+      this.isPrivilegedRole(user.role),
     );
   }
 
@@ -310,9 +480,107 @@ export class CasesController {
     const user =
       this.ensureUser(req);
 
+    // Nothing in the app calls this for a client; it is a staff correction.
+    // Letting any signed-in user mark any case paid would skip payment.
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException(
+        'Only a case manager or an admin can mark a case as paid',
+      );
+    }
+
     return this.casesService.markPaymentCompleted(
       id,
       user.id,
+    );
+  }
+
+  // ============================================================
+  // SEND JOINT INFORMATION FOR THE PARTNER'S APPROVAL
+  // POST /cases/:id/joint-information/submit
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/joint-information/submit')
+  async submitJointInformationForReview(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const user =
+      this.ensureUser(req);
+
+    return this.casesService.submitJointInformationForReview(
+      id,
+      user.id ?? user._id,
+    );
+  }
+
+  // ============================================================
+  // ASSIGN CASE MANAGER
+  // POST /cases/:id/assign-case-manager
+  // ============================================================
+
+  // ============================================================
+  // UPDATE CASE / PRIORITY
+  // PUT /cases/:id
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Put(':id')
+  async updateCase(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const user = this.ensureUser(req);
+    await this.assertOwnerOrStaff(id, user);
+    return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id')
+  async patchCase(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const user = this.ensureUser(req);
+    await this.assertOwnerOrStaff(id, user);
+    return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
+  // Changing a case's title or priority is for its owner and for staff.
+  private async assertOwnerOrStaff(caseId: string, user: any) {
+    const c = await this.casesService.findById(caseId);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+    const isOwner = c.owner?.toString() === (user.id ?? user._id)?.toString();
+    if (!isOwner && !this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/assign-case-manager')
+  async assignCaseManager(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body('managerId') managerId: string,
+  ) {
+    const user = this.ensureUser(req);
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    if (!isPrivileged) {
+      throw new ForbiddenException(
+        'Only admins or case managers may assign cases',
+      );
+    }
+
+    return this.casesService.assignCaseManager(
+      id,
+      managerId,
+      user.id ?? user._id,
+      user.role,
     );
   }
 
@@ -366,8 +634,11 @@ export class CasesController {
   @UseGuards(JwtAuthGuard)
   @Get(':id/status')
   async getStatus(
+    @Req() req: any,
     @Param('id') id: string,
   ) {
+    const user = this.ensureUser(req);
+
     const c =
       await this.casesService.findById(
         id,
@@ -376,6 +647,8 @@ export class CasesController {
     if (!c) {
       throw new NotFoundException('Case not found');
     }
+
+    await this.casesService.assertCanViewCase(c, user);
 
     return {
       workflowStatus: c.workflowStatus,
@@ -498,47 +771,4 @@ export class CasesController {
       user.id,
     );
   }
-
-  // ============================================================
-  // GET ONBOARDING
-  // GET /cases/:id/onboarding
-  // ============================================================
-
-  @UseGuards(JwtAuthGuard)
-  @Get(':id/onboarding')
-  async getOnboarding(
-    @Req() req: any,
-    @Param('id') id: string,
-  ) {
-    const user = this.ensureUser(req);
-    return this.casesService.getOnboarding(id, user);
-  }
-
-  // ============================================================
-  // SAVE / COMPLETE ONBOARDING
-  // POST /cases/:id/onboarding
-  // PUT  /cases/:id/onboarding
-  // ============================================================
-
-  @UseGuards(JwtAuthGuard)
-  @Post(':id/onboarding')
-  async saveOnboarding(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body() dto: SaveOnboardingDto,
-  ) {
-    const user = this.ensureUser(req);
-    return this.casesService.saveOnboarding(id, dto, user);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Put(':id/onboarding')
-  async updateOnboarding(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body() dto: SaveOnboardingDto,
-  ) {
-    const user = this.ensureUser(req);
-    return this.casesService.saveOnboarding(id, dto, user);
-  }
-}
+}

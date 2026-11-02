@@ -23,12 +23,14 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 
 import { LawyerService } from './lawyer.service';
+import { LawyerCaseGuard } from './lawyer-case.guard';
 
 import { CreateNoteDto } from '../case-manager/dto/create-note.dto';
 import { CreateVersionDto } from '../case-manager/dto/create-version.dto';
 
 @Controller('lawyer')
-@UseGuards(JwtAuthGuard)
+// Routes with a :caseId are limited to staff and the lawyer assigned to that case.
+@UseGuards(JwtAuthGuard, LawyerCaseGuard)
 export class LawyerController {
   constructor(
     private readonly lawyerService: LawyerService,
@@ -267,6 +269,36 @@ export class LawyerController {
     const user = this.ensureUser(req);
 
     return this.lawyerService.stageSummary(
+      user.id,
+    );
+  }
+
+  // =====================================================
+  // COMPLETED
+  // =====================================================
+
+  @Get('completed/list')
+  async completedCases(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.completedCases(
+      user.id,
+    );
+  }
+
+  // =====================================================
+  // MY CASES (active)
+  // =====================================================
+
+  @Get('cases')
+  async myCases(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.myCases(
       user.id,
     );
   }
@@ -681,19 +713,4 @@ export class LawyerController {
       caseId,
     );
   }
-
-  // =====================================================
-  // COMPLETED
-  // =====================================================
-
-  @Get('completed/list')
-  async completedCases(
-    @Req() req,
-  ) {
-    const user = this.ensureUser(req);
-
-    return this.lawyerService.completedCases(
-      user.id,
-    );
-  }
-}
+}

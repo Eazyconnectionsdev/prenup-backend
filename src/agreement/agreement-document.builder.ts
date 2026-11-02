@@ -92,6 +92,10 @@ export async function buildAgreementDocxBuffer(
     ['Joint Assets', data.jointInformation?.jointAssets],
     ['Joint Income & Revenue', data.jointInformation?.jointIncomeAndRevenue],
     ['Joint Liabilities & Debts', data.jointInformation?.jointLiabilitiesAndDebts],
+    [
+      'Matrimonial Agreement & Intentions',
+      data.jointInformation?.matrimonialAgreement,
+    ],
   ]);
 
   const doc = new Document({
@@ -149,10 +153,17 @@ function addFieldGroupsToDoc(
   sections: Paragraph[],
   groups: [string, Record<string, any> | undefined][],
 ): void {
-  for (const [groupLabel, data] of groups) {
+  for (const [groupLabel, group] of groups) {
     sections.push(
       new Paragraph({ heading: HeadingLevel.HEADING_2, children: [new TextRun(groupLabel)] }),
     );
+
+    // Typed sub-schemas arrive as mongoose subdocuments, whose own enumerable
+    // properties are internals rather than the answers
+    const data =
+      typeof (group as any)?.toObject === 'function'
+        ? (group as any).toObject()
+        : group;
 
     if (!data || Object.keys(data).length === 0) {
       sections.push(
@@ -186,7 +197,14 @@ function formatFieldLabel(key: string): string {
 
 function formatFieldValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return 'N/A';
-  if (Array.isArray(value)) return value.length ? value.join(', ') : 'N/A';
+  if (Array.isArray(value)) {
+    if (!value.length) return 'N/A';
+    return value
+      .map((item) =>
+        item !== null && typeof item === 'object' ? JSON.stringify(item) : String(item),
+      )
+      .join(', ');
+  }
   if (value instanceof Date) return value.toLocaleDateString('en-GB');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);

@@ -14,12 +14,13 @@ export class CompaniesService {
   }
 
   async listAll() {
-    return this.companyModel.find().lean().exec();
+    // Company documents (certificates, insurance...) are admin-only.
+    return this.companyModel.find().select('-documents').lean().exec();
   }
 
   async findById(id: string) {
     if (!id) throw new BadRequestException('Invalid id');
-    return this.companyModel.findById(id).exec();
+    return this.companyModel.findById(id).select('-documents').exec();
   }
 
   async seedInitialCompaniesIfEmpty() {

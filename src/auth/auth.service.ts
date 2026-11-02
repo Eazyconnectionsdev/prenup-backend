@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
 import { CasesService } from '../cases/cases.service';
+import { PartnerInviteService } from '../cases/partner-invite.service';
 import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { User, UserDocument } from 'src/users/schemas/user.schema';
@@ -21,12 +22,18 @@ import { LocationService } from '../common/location.service';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
+  private static readonly RESEND_COOLDOWN_MS = 60 * 1000;
+
+  private static readonly DUMMY_HASH =
+    '$2b$10$CwTycUXWue0Thq9StjUM0uJ8.4V8y1o0xqJ1vYk0M3m1m2uZ5s3gC';
+
   constructor(
     private jwtService: JwtService,
     private usersService: UsersService,
     private mailService: MailService,
     private config: ConfigService,
     private casesService: CasesService,
+    private partnerInviteService: PartnerInviteService,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private locationService: LocationService,
   ) { }
@@ -38,8 +45,6 @@ export class AuthService {
       firstName,
       middleName,
       lastName,
-      role = 'end_user',
-      endUserType,
       phone,
       marketingConsent = false,
       acceptedTerms,
@@ -67,21 +72,19 @@ export class AuthService {
       firstName,
       middleName,
       lastName,
-      role,
-      endUserType,
+      // Never trust client-supplied role / endUserType on public signup.
+      role: 'end_user',
+      endUserType: 'user1',
       phone: phone?.trim(),
       marketingConsent: !!marketingConsent,
       acceptedTerms: true,
       emailVerified: false,
     } as any);
 
-    const createdCase = await this.casesService.create(user._id.toString());
-
-    await this.userModel.findByIdAndUpdate(
-      user._id,
-      { $set: { inviteCaseId: createdCase._id } },
-      { new: true },
-    );
+    // No case is created here. A Case ID is issued only when the client
+    // starts a legal matter (POST /cases); an account is not a matter, and a
+    // partner who is invited later must be able to join someone else's case
+    // without ever having been given one of their own.
 
     // Capture registration location (fire-and-forget)
     void this.locationService.capture(user._id.toString(), ip, 'registration');
@@ -163,52 +166,203 @@ export class AuthService {
       return;
     }
 
+    // Cooldown: ignore resend if the current OTP was issued under 60s ago.
+    // Works for expired OTPs too (they were issued long ago).
+    const expiryMs =
+      Number(this.config.get('OTP_EXPIRY_MINUTES') || 10) * 60 * 1000;
+    const issuedAt = user.emailVerificationOtpExpires
+      ? user.emailVerificationOtpExpires.getTime() - expiryMs
+      : 0;
+    if (Date.now() - issuedAt < AuthService.RESEND_COOLDOWN_MS) {
+      throw new BadRequestException(
+        'Please wait a minute before requesting another code',
+      );
+    }
+
     await this.generateAndSendVerificationOtp(user);
   }
 
   async validateUser(email: string, password: string) {
-    const user = await this.usersService.findByEmail(email);
+    const user = await this.usersService.findByEmail(email?.trim());
 
-    if (!user) return null;
+    // Always run a bcrypt compare so a missing user and a wrong password take
+    // about the same time (prevents email enumeration by timing)
     const ok = await this.usersService.comparePassword(
       password,
-      user.passwordHash,
+      user?.passwordHash || AuthService.DUMMY_HASH,
     );
-    if (!ok) return null;
+    if (!user || !ok) return null;
     return user;
   }
 
+  /**
+   * Starts the "forgot password" flow. Always resolves silently for unknown
+   * or recently-mailed addresses so the response cannot be used to probe
+   * which emails exist.
+   */
   async requestPasswordReset(email: string) {
-    const user = await this.usersService.findByEmail(email);
+    const normalizedEmail = email?.trim().toLowerCase();
+    if (!normalizedEmail) return;
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
     if (!user) {
       // do not leak
       return;
     }
-    const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(
-      Date.now() +
-      Number(this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2) * 3600 * 1000,
+
+    // Throttle: if a still-valid link was issued less than a minute ago,
+    // don't mail another one (and don't tell the caller either).
+    const expiryHours = Number(
+      this.config.get('RESET_TOKEN_EXPIRY_HOURS') || 2,
     );
-    await this.usersService.setResetToken(user._id.toString(), token, expires);
-    const resetUrl = `${this.config.get('APP_BASE_URL')}/auth/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
-    await this.mailService.sendReset(user.email, resetUrl);
+    const expiryMs = expiryHours * 3600 * 1000;
+    const issuedAt = user.resetPasswordExpires
+      ? user.resetPasswordExpires.getTime() - expiryMs
+      : 0;
+    // A link that outlives the standard window (an admin's welcome link) looks
+    // as if it was issued in the future; it must not block a fresh request.
+    if (
+      user.resetPasswordToken &&
+      issuedAt <= Date.now() &&
+      Date.now() - issuedAt < AuthService.RESEND_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + expiryMs);
+
+    // Only the digest is stored: a leaked database dump cannot be used to
+    // reset anyone's password.
+    await this.usersService.setResetToken(
+      user._id.toString(),
+      AuthService.hashResetToken(token),
+      expires,
+    );
+
+    const baseUrl = String(
+      this.config.get('APP_BASE_URL') || this.config.get('FRONTEND_URL') || '',
+    ).replace(/\/+$/, '');
+    const resetUrl = `${baseUrl}/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
+
+    try {
+      await this.mailService.sendReset(user.email, resetUrl, { expiryHours });
+    } catch (err) {
+      this.logger.error('Failed to send password reset email', err as any);
+    }
+  }
+
+  /**
+   * A one-time "choose your password" link for an account an admin created.
+   * The normal reset page consumes it, and only the digest is stored, as for
+   * reset links.
+   */
+  async createPasswordSetupLink(
+    user: { _id: { toString(): string }; email: string },
+    expiryHours: number,
+  ): Promise<string> {
+    const token = crypto.randomBytes(32).toString('hex');
+    await this.usersService.setResetToken(
+      user._id.toString(),
+      AuthService.hashResetToken(token),
+      new Date(Date.now() + expiryHours * 3600 * 1000),
+    );
+    const baseUrl = String(
+      this.config.get('APP_BASE_URL') || this.config.get('FRONTEND_URL') || '',
+    ).replace(/\/+$/, '');
+    return `${baseUrl}/reset-password?token=${token}&email=${encodeURIComponent(user.email)}`;
+  }
+
+  /**
+   * Checks a reset link without consuming it, so the reset page can show an
+   * "expired link" state instead of a form the user cannot submit.
+   */
+  async validateResetToken(email: string, token: string) {
+    const user = await this.findUserByResetToken(email, token);
+    return { valid: true, email: user.email };
   }
 
   async resetPassword(email: string, token: string, newPassword: string) {
-    const user = await this.usersService.findByEmail(email);
-    if (!user) throw new NotFoundException('User not found');
-    if (!user.resetPasswordToken || user.resetPasswordToken !== token)
+    const user = await this.findUserByResetToken(email, token);
 
-      throw new BadRequestException('Invalid token');
-    if (!user.resetPasswordExpires || user.resetPasswordExpires < new Date())
-      throw new BadRequestException('Token expired');
+    // Reusing the old password would leave the account on a credential the
+    // user just asked to replace.
+    const sameAsOld = await this.usersService.comparePassword(
+      newPassword,
+      user.passwordHash || AuthService.DUMMY_HASH,
+    );
+    if (sameAsOld) {
+      throw new BadRequestException(
+        'Choose a password you have not used before',
+      );
+    }
+
     const hash = await this.usersService.hashPassword(newPassword);
+    // Also clears the reset token, so the link is single-use.
     await this.usersService.updatePassword(user._id.toString(), hash);
+
+    // A verified password implies a reachable inbox: an account that was
+    // stuck unverified can sign in once the reset completes.
+    if (!user.emailVerified) {
+      await this.usersService.markEmailVerified(user._id.toString());
+    }
+
+    try {
+      await this.mailService.sendPasswordChanged(user.email);
+    } catch (err) {
+      this.logger.error('Failed to send password-changed email', err as any);
+    }
   }
+
+  /**
+   * Resolves the user behind a reset link, rejecting unknown emails, wrong
+   * tokens and expired tokens with the same generic message.
+   */
+  private async findUserByResetToken(email: string, token: string) {
+    const normalizedEmail = email?.trim().toLowerCase();
+    const trimmedToken = token?.trim();
+    const invalid = new BadRequestException(
+      'This password reset link is invalid or has expired',
+    );
+
+    if (!normalizedEmail || !trimmedToken) throw invalid;
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
+    if (!user?.resetPasswordToken) throw invalid;
+
+    const expected = Buffer.from(user.resetPasswordToken);
+    const actual = Buffer.from(AuthService.hashResetToken(trimmedToken));
+    if (
+      expected.length !== actual.length ||
+      !crypto.timingSafeEqual(expected, actual)
+    ) {
+      throw invalid;
+    }
+
+    if (
+      !user.resetPasswordExpires ||
+      user.resetPasswordExpires.getTime() < Date.now()
+    ) {
+      throw invalid;
+    }
+
+    return user;
+  }
+
+  private static hashResetToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
   async acceptInvite(
     caseId: string,
     token: string,
     password: string,
+    profile: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      phone?: string;
+    } = {},
     ip?: string,
   ) {
     const caseDoc = await this.casesService.findById(caseId);
@@ -227,6 +381,11 @@ export class AuthService {
         'Invalid token',
       );
 
+    }
+
+    // One partner per case.
+    if (caseDoc.invitedUser) {
+      throw new BadRequestException('This case already has a partner');
     }
 
     if (
@@ -250,22 +409,31 @@ export class AuthService {
       );
     }
 
-    const email =
-      partner.email.toLowerCase();
+    // The partner may register with their own email/name/phone. If the email
+    // differs from the one invited, it is unverified until they confirm an OTP.
+    const invitedEmail = partner.email.toLowerCase();
+    const email = (profile.email?.trim() || invitedEmail).toLowerCase();
+    const emailChanged = email !== invitedEmail;
     const existing =
       await this.usersService.findByEmail(
         email,
       );
 
+    // They already have an account: sign in and accept instead of registering
+    // a duplicate (or being asked to delete the account).
     if (existing) {
-      throw new BadRequestException(
-        'User already exists',
-      );
+      throw new BadRequestException({
+        code: 'ACCOUNT_EXISTS',
+        message:
+          'An account with this email already exists. Please sign in to accept the invitation.',
+      });
     }
 
+    const firstName = profile.firstName?.trim() || partner.firstName;
+    const lastName = profile.lastName?.trim() || partner.lastName;
     const fullName = [
-      partner.firstName,
-      partner.lastName,
+      firstName,
+      lastName,
     ]
       .filter(Boolean)
 
@@ -285,15 +453,16 @@ export class AuthService {
         await this.usersService.create({
           email,
           passwordHash,
-          firstName: partner.firstName,
+          firstName,
 
-          lastName: partner.lastName,
+          lastName,
+          phone: profile.phone?.trim() || partner.mobileNumber || null,
           role: 'end_user',
           endUserType: 'user2',
           invitedBy: caseDoc.owner,
           inviteCaseId: caseDoc._id,
           acceptedTerms: true,
-          emailVerified: true,
+          emailVerified: !emailChanged,
         } as any);
     } catch (err) {
       this.logger?.error?.(
@@ -305,18 +474,6 @@ export class AuthService {
         'Failed to create invited user',
       );
     }
-
-    await this.userModel.updateOne(
-      { _id: caseDoc.owner },
-      {
-
-        $set: {
-          invitedUser: user._id,
-        },
-
-      },
-    );
-
 
     const createdId =
       user && (user as any)._id
@@ -337,21 +494,41 @@ export class AuthService {
       );
     }
 
-    await this.casesService.attachInvitedUser(
-      caseId,
-      createdId,
-    );
+    // Claims the case's single partner slot. If someone else got there first
+    // the new account is withdrawn rather than left dangling.
+    try {
+      await this.casesService.attachInvitedUser(
+        caseId,
+        createdId,
+      );
+    } catch (err) {
+      await this.userModel.deleteOne({ _id: user._id });
+      throw err;
+    }
 
-    await this.casesService.setInviteCredentials(
-      caseId,
-
+    await this.userModel.updateOne(
+      { _id: caseDoc.owner },
       {
-        email,
-        password,
-        createdAt: new Date(),
-      },
 
+        $set: {
+          invitedUser: user._id,
+        },
+
+      },
     );
+
+    // Track who actually registered (compared with what the inviter typed).
+    await this.partnerInviteService.markAccepted(caseId, user as any);
+
+    // Different email: it must be verified before the partner can sign in.
+    if (emailChanged) {
+      await this.generateAndSendVerificationOtp(user);
+      return {
+        success: true,
+        requiresEmailVerification: true,
+        email,
+      };
+    }
 
     try {
       await this.mailService.sendInviteCredentials(
@@ -362,18 +539,16 @@ export class AuthService {
     } catch (err) {
       this.logger?.error?.(
         'Failed to send invite credentials email',
-
         err as any,
-
       );
     }
-
 
     // Capture registration location for the invited partner (fire-and-forget)
     void this.locationService.capture(createdId, ip, 'registration');
 
     return this.signUser(user);
   }
+
   async getUserProfile(id: string): Promise<User> {
     const user = await this.usersService.findById(id);
     if (!user) {
@@ -383,6 +558,8 @@ export class AuthService {
     return user;
   }
 
+  // The case owner removes their own partner. The partner's account is kept
+  // (only the link is cut), so they can be invited again.
   async deletePartner(currentUserId: string): Promise<{ message: string }> {
     const user = await this.userModel.findById(currentUserId);
 
@@ -390,29 +567,14 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    if (!user.invitedUser) {
+    if (!user.invitedUser || !user.inviteCaseId) {
       throw new BadRequestException('No partner linked to this user');
     }
 
-    const partner = await this.userModel.findByIdAndDelete(
-      user.invitedUser._id,
-    );
-    if (!partner) {
-      throw new NotFoundException('Partner not found');
-    }
-
-    partner.invitedBy = null;
-    user.invitedUser = null;
-
-    await user.save();
-
-    if (user.inviteCaseId) {
-      await this.casesService.deleteCaseDataForPartner(
-        user.inviteCaseId.toString(),
-      );
-    }
-
-    return { message: 'Partner removed successfully' };
+    return this.casesService.removePartner(user.inviteCaseId.toString(), {
+      id: currentUserId,
+      role: user.role,
+    });
   }
 
   //

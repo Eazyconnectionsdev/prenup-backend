@@ -60,6 +60,7 @@ import {
 import { LawyerService } from './lawyer.service';
 
 import { LawyerController } from './lawyer.controller';
+import { LawyerCaseGuard } from './lawyer-case.guard';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -115,6 +116,7 @@ import { LawyerController } from './lawyer.controller';
   ],
   providers: [
     LawyerService,
+    LawyerCaseGuard,
   ],
 
   exports: [

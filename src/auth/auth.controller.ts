@@ -23,10 +23,14 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RequestResetDto } from './dto/request-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ValidateResetTokenDto } from './dto/validate-reset-token.dto';
 import { CasesService } from '../cases/cases.service';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
 
+import { AcceptInviteDto } from './dto/accept-invite.dto';
+import { AcceptExistingInviteDto } from './dto/accept-existing-invite.dto';
+import { PartnerInviteService } from '../cases/partner-invite.service';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
@@ -41,6 +45,7 @@ export class AuthController {
     private authService: AuthService,
     private casesService: CasesService,
     private usersService: UsersService,
+    private partnerInviteService: PartnerInviteService,
     private locationService: LocationService,
   ) { }
 
@@ -68,6 +73,13 @@ export class AuthController {
     if (!user.emailVerified) {
       throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
+
+    // Only reached with the right password, so this does not reveal which emails exist.
+    if (user.active === false) {
+      throw new UnauthorizedException('This account has been deactivated. Please contact support.');
+    }
+
+    void this.usersService.recordLogin((user._id as any).toString());
 
     // Capture login location (fire-and-forget)
     void this.locationService.capture(
@@ -129,14 +141,34 @@ export class AuthController {
   @HttpCode(200)
   async requestReset(@Body() dto: RequestResetDto) {
     await this.authService.requestPasswordReset(dto.email);
-    return { message: 'If that email exists, a reset link has been sent' };
+    // Deliberately identical for known and unknown emails.
+    return {
+      success: true,
+      message:
+        'If an account exists for that email, a password reset link is on its way.',
+    };
+  }
+
+  // Lets the reset page tell a usable link from a stale one before the user
+  // types a new password.
+  @Post('validate-reset-token')
+  @HttpCode(200)
+  async validateResetToken(@Body() dto: ValidateResetTokenDto) {
+    const result = await this.authService.validateResetToken(
+      dto.email,
+      dto.token,
+    );
+    return { success: true, ...result };
   }
 
   @Post('reset-password')
   @HttpCode(200)
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.email, dto.token, dto.newPassword);
-    return { message: 'Password reset successful' };
+    return {
+      success: true,
+      message: 'Your password has been reset. You can now sign in.',
+    };
   }
 
 
@@ -196,19 +228,67 @@ export class AuthController {
     await this.authService.resendRegistrationOtp(dto.email);
     return { message: 'If that email exists and is unverified, a new OTP was sent.' };
   }
- 
+
+  @Get('invite-info')
+  async inviteInfo(
+    @Query('caseId') caseId: string,
+    @Query('token') token: string,
+  ) {
+    const info = await this.partnerInviteService.openByToken(caseId, token);
+
+    // Only reachable with a valid token, so the invitee may be told that they
+    // already have an account: they sign in to accept instead of registering.
+    const existing = await this.usersService.findByEmail(info.email);
+    return { ...info, accountExists: !!existing };
+  }
+
+  // Signed-in invitee: what accepting would do (including what happens to a
+  // case they already have).
+  @UseGuards(JwtAuthGuard)
+  @Get('invite-preview')
+  async invitePreview(
+    @Req() req,
+    @Query('caseId') caseId: string,
+    @Query('token') token?: string,
+  ) {
+    return this.casesService.previewInviteForUser(req.user.id, caseId, token);
+  }
+
+  // Signed-in invitee with an existing account accepts the invitation.
+  @UseGuards(JwtAuthGuard)
+  @Post('accept-invite/existing')
+  @HttpCode(200)
+  async acceptInviteExisting(@Req() req, @Body() dto: AcceptExistingInviteDto) {
+    return this.casesService.acceptInviteAsExistingUser(
+      req.user.id,
+      dto.caseId,
+      dto.token,
+      !!dto.confirmSetAsideOwnCase,
+    );
+  }
+
+  // An open invitation addressed to the signed-in user's email, if any.
+  @UseGuards(JwtAuthGuard)
+  @Get('pending-invite')
+  async pendingInvite(@Req() req) {
+    return this.casesService.pendingInviteFor(req.user.id);
+  }
 
   @Post('accept-invite')
   async acceptInvite(
-    @Body('token') token: string,
-    @Body('caseId') caseId: string,
-    @Body('password') password: string,
+    @Body() dto: AcceptInviteDto,
     @Req() req: Request,
   ) {
     return this.authService.acceptInvite(
-      caseId,
-      token,
-      password,
+      dto.caseId,
+      dto.token,
+      dto.password,
+      {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        phone: dto.phone,
+      },
       req.ip,
     );
   }

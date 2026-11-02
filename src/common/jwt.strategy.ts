@@ -31,7 +31,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: any) {
     const user = await this.usersService.findById(payload.id);
-    if (!user) return null;
+    // A deactivated account loses access immediately, not when its token expires.
+    if (!user || user.active === false) return null;
     return {
       id: user._id,
       email: user.email,

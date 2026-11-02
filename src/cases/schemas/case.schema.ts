@@ -61,6 +61,32 @@ export const CaseOnboardingSchema =
 
 
 
+export const AGREEMENT_TYPES = [
+  'prenup-marriage',
+  'prenup-civil',
+  'postnup-marriage',
+  'postnup-civil',
+  'cohabitation',
+  'help-choose',
+] as const;
+
+@Schema({ _id: false })
+export class OnboardingInfo {
+  @Prop({ type: Boolean, default: false })
+  completed!: boolean;
+
+  @Prop({ type: Date, default: null })
+  completedAt?: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  completedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Boolean, default: false })
+  residesInUK!: boolean;
+}
+
+export const OnboardingInfoSchema = SchemaFactory.createForClass(OnboardingInfo);
+
 export enum CaseWorkflowStatus {
   NOT_PAID = 'NOT_PAID',
 
@@ -70,12 +96,13 @@ export enum CaseWorkflowStatus {
 
   CM_APPROVED = 'CM_APPROVED',
 
-  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
-
   PRE_LAWYER_PENDING = 'PRE_LAWYER_PENDING',
 
   PRE_LAWYER_COMPLETED = 'PRE_LAWYER_COMPLETED',
 
+  LAWYERS_ASSIGNED = 'LAWYERS_ASSIGNED',
+
+         
   LAWYER_CLIENT_CONFIRMATION =
   'LAWYER_CLIENT_CONFIRMATION',
 
@@ -224,6 +251,76 @@ export const PreQuestionnaireSchema =
   );
 
 //
+// STAGES & REVIEW ENUMS
+//
+
+export enum PaymentStatus {
+  PENDING = 'PENDING',
+  INITIATED = 'INITIATED',
+  FAILED = 'FAILED',
+  COMPLETED = 'COMPLETED',
+  REFUNDED = 'REFUNDED',
+}
+
+export enum PartnerReviewStatus {
+  IN_PROGRESS = 'IN_PROGRESS',
+  FINAL_SUBMIT = 'FINAL_SUBMIT',
+  IN_REVIEW = 'IN_REVIEW',
+  APPROVED = 'APPROVED',
+}
+
+export enum MutualApprovalStatus {
+  PENDING = 'PENDING',
+  COMPLETED = 'COMPLETED',
+}
+
+@Schema({ _id: false })
+export class ReviewTimelineEntry {
+  @Prop({ type: String, required: true })
+  action!: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  actor?: Types.ObjectId | null;
+
+  @Prop({
+    type: String,
+    enum: ['PRIMARY', 'SECONDARY', 'SYSTEM'],
+    default: 'PRIMARY',
+  })
+  actorRole!: 'PRIMARY' | 'SECONDARY' | 'SYSTEM';
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p1Status!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p2Status!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(MutualApprovalStatus),
+    default: MutualApprovalStatus.PENDING,
+  })
+  mutualStatus!: MutualApprovalStatus;
+
+  @Prop({ type: Date, default: () => new Date() })
+  timestamp!: Date;
+
+  @Prop({ type: String, default: null })
+  notes?: string | null;
+}
+
+export const ReviewTimelineEntrySchema =
+  SchemaFactory.createForClass(ReviewTimelineEntry);
+
+//
 // APPROVAL
 //
 
@@ -240,6 +337,36 @@ export class Approval {
 
   @Prop({ type: Date, default: null })
   user2ApprovedAt!: Date | null;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p1ReviewStatus!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PartnerReviewStatus),
+    default: PartnerReviewStatus.IN_PROGRESS,
+  })
+  p2ReviewStatus!: PartnerReviewStatus;
+
+  @Prop({
+    type: String,
+    enum: Object.values(MutualApprovalStatus),
+    default: MutualApprovalStatus.PENDING,
+  })
+  mutualApprovalAndSnapshot!: MutualApprovalStatus;
+
+  @Prop({ type: Date, default: null })
+  mutualApprovalCompletedAt?: Date | null;
+
+  @Prop({ type: [ReviewTimelineEntrySchema], default: [] })
+  reviewTimeline!: ReviewTimelineEntry[];
+
+  @Prop({ type: Object, default: null })
+  snapshotData?: any;
 
   @Prop({ type: Types.ObjectId, default: null })
   disapprovedBy!: Types.ObjectId | null;
@@ -335,6 +462,196 @@ export const PartnerInformationSchema =
   );
 
 //
+// MATRIMONIAL AGREEMENT & INTENTIONS
+//
+
+export const FUTURE_ASSETS_TREATMENTS = [
+  'SeparateToAcquirer',
+  'FamilyUseJoint',
+  'PooledEqually',
+  'Custom',
+] as const;
+
+export const FUTURE_GIFTS_TREATMENTS = [
+  'SeparateToRecipient',
+  'JointEqually',
+  'Custom',
+] as const;
+
+export const INHERITANCE_SELECTIONS = ['NoneExpected', 'LogDetails'] as const;
+
+export const INHERITANCE_STATUSES = [
+  'FutureExpectation',
+  'PendingProbate',
+] as const;
+
+export const SPOUSAL_MAINTENANCE_INTENTIONS = [
+  'MutualWaiver',
+  'CareerSacrificeOnly',
+  'Custom',
+] as const;
+
+export const CRITICAL_ILLNESS_SAFEGUARDS = [
+  'TermsFixed',
+  'Voidable',
+  'Custom',
+] as const;
+
+export const DEATH_WILLS_ALIGNMENTS = [
+  'MirrorDivorce',
+  'ProvideDifferently',
+  'Unsure',
+] as const;
+
+export const REVIEW_TRIGGER_TYPES = ['Never', 'Standard', 'Custom'] as const;
+
+export const STANDARD_MILESTONES = [
+  'child_birth',
+  'career_change',
+  '5_year',
+  '10_year',
+] as const;
+
+export const ASSET_TREATMENTS = [
+  'KeepSeparate',
+  'ShareEqually',
+  'Contribution',
+  'Percentage',
+  'Custom',
+] as const;
+
+export const INHERITANCE_CURRENCIES = [
+  'GBP',
+  'USD',
+  'EUR',
+  'AUD',
+  'CAD',
+] as const;
+
+// One expected or pending inheritance in the register. Amounts are kept as
+// entered (strings) so a partly filled row never fails to save.
+@Schema({ _id: false })
+export class InheritanceEntry {
+  @Prop({ type: String, default: null })
+  id?: string | null;
+
+  @Prop({ type: String, default: null })
+  recipientPartner?: string | null;
+
+  @Prop({ type: String, enum: INHERITANCE_STATUSES, default: null })
+  inheritanceStatus?: string | null;
+
+  @Prop({ type: String, default: null })
+  composition?: string | null;
+
+  @Prop({ type: String, default: null })
+  originalAmount?: string | null;
+
+  @Prop({ type: String, enum: INHERITANCE_CURRENCIES, default: null })
+  originalCurrency?: string | null;
+
+  @Prop({ type: String, default: null })
+  gbpEquivalent?: string | null;
+
+  @Prop({ type: String, default: null })
+  basisOfEstimate?: string | null;
+
+  @Prop({ type: String, enum: ASSET_TREATMENTS, default: null })
+  treatment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  contributionText?: string;
+
+  @Prop({ type: String, default: '' })
+  percentageValue?: string;
+
+  @Prop({ type: String, default: '' })
+  customText?: string;
+}
+
+export const InheritanceEntrySchema =
+  SchemaFactory.createForClass(InheritanceEntry);
+
+// The enforceability gates: any 'Yes' flags the case for the case manager.
+@Schema({ _id: false })
+export class SpecialCircumstances {
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  pregnancyOrAdoption?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  sharedBusiness?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  financialReliance?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  coOwnedRealEstate?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  highValueAssets?: string;
+
+  @Prop({ type: String, enum: ['Yes', 'No'], default: 'No' })
+  priorDependents?: string;
+}
+
+export const SpecialCircumstancesSchema =
+  SchemaFactory.createForClass(SpecialCircumstances);
+
+@Schema({ _id: false })
+export class MatrimonialAgreement {
+  @Prop({ type: String, enum: FUTURE_ASSETS_TREATMENTS, default: null })
+  futureAssetsTreatment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customFutureAssets?: string;
+
+  @Prop({ type: String, enum: FUTURE_GIFTS_TREATMENTS, default: null })
+  futureGiftsTreatment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customFutureGifts?: string;
+
+  @Prop({ type: String, enum: INHERITANCE_SELECTIONS, default: null })
+  inheritanceSelection?: string | null;
+
+  @Prop({ type: [InheritanceEntrySchema], default: [] })
+  inheritanceEntries?: InheritanceEntry[];
+
+  @Prop({ type: String, enum: SPOUSAL_MAINTENANCE_INTENTIONS, default: null })
+  spousalMaintenanceIntention?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customSpousalMaintenance?: string;
+
+  @Prop({ type: String, enum: CRITICAL_ILLNESS_SAFEGUARDS, default: null })
+  criticalIllnessSafeguard?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customHealthSafeguards?: string;
+
+  @Prop({ type: String, enum: DEATH_WILLS_ALIGNMENTS, default: null })
+  deathWillsAlignment?: string | null;
+
+  @Prop({ type: String, enum: REVIEW_TRIGGER_TYPES, default: null })
+  reviewTriggerType?: string | null;
+
+  @Prop({ type: [String], enum: STANDARD_MILESTONES, default: [] })
+  standardMilestones?: string[];
+
+  @Prop({ type: String, default: '' })
+  customReviewTriggers?: string;
+
+  @Prop({ type: SpecialCircumstancesSchema, default: {} })
+  specialCircumstances?: SpecialCircumstances;
+
+  @Prop({ type: String, default: '' })
+  specialCircumstancesOverview?: string;
+}
+
+export const MatrimonialAgreementSchema =
+  SchemaFactory.createForClass(MatrimonialAgreement);
+
+//
 // JOINT INFORMATION
 //
 
@@ -348,6 +665,11 @@ export class JointInformation {
 
   @Prop({ type: Object, default: {} })
   jointLiabilitiesAndDebts?: any;
+
+  // No default: the joint section counts this form as filled in as soon as the
+  // field exists, so it must stay absent until the couple actually saves it
+  @Prop({ type: MatrimonialAgreementSchema })
+  matrimonialAgreement?: MatrimonialAgreement;
 }
 
 export const JointInformationSchema =
@@ -409,6 +731,27 @@ export class Case {
     default: false,
   })
   paymentCompleted?: boolean;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PaymentStatus),
+    default: PaymentStatus.PENDING,
+  })
+  paymentStatus!: PaymentStatus;
+
+  // Chosen during onboarding (user 1 only).
+  @Prop({
+    type: String,
+    enum: AGREEMENT_TYPES,
+    default: null,
+  })
+  agreementType?: string | null;
+
+  @Prop({
+    type: OnboardingInfoSchema,
+    default: {},
+  })
+  onboarding?: OnboardingInfo;
 
   @Prop({
     type: Object,
@@ -735,6 +1078,37 @@ export class Case {
     default: null,
   })
   archivedAt?: Date | null;
+
+  // =====================================================
+  // SET ASIDE (the owner joined their partner's case instead)
+  // The case, its data and its Case ID are kept; the ID is never reused.
+  // =====================================================
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  abandonedAt?: Date | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'User',
+    default: null,
+  })
+  abandonedBy?: Types.ObjectId | null;
+
+  @Prop({
+    type: String,
+    default: null,
+  })
+  abandonedReason?: string | null;
+
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'Case',
+    default: null,
+  })
+  supersededByCaseId?: Types.ObjectId | null;
 
   // =====================================================
   // VERSION TRACKING

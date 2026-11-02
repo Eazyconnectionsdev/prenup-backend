@@ -9,18 +9,26 @@ import {
   Delete,
   Query,
   Patch,
+  Put,
+  Delete,
+  Res,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors,
   BadRequestException,
   UseInterceptors,
   UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
-import { AdminService } from './admin.service';
+import { AdminService, MAX_COMPANY_FILE_BYTES, MAX_LAWYER_PHOTO_BYTES } from './admin.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
+import { CreateCompanyDocumentDto } from './dto/create-company-document.dto';
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
+import { CreateLawyerDocumentDto } from './dto/create-lawyer-document.dto';
 import { CreateEnquiryDto } from './dto/create-enquiry.dto';
-import { UpdateAdminSettingsDto } from './dto/update-admin-settings.dto';
-import { AddCompanyNoteDto, AddLawyerNoteDto } from './dto/add-note.dto';
+import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('admin')
@@ -37,10 +45,91 @@ export class AdminController {
     return user && (user.role === 'superadmin' || user.role === 'admin');
   }
 
-  // =============================================
-  // USERS
-  // =============================================
+  // ------------------- Dashboard -------------------
+  @Get('dashboard')
+  async dashboard(@Req() req) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getDashboard();
+  }
 
+  @Get('dashboard/stages')
+  async dashboardStages(@Req() req) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getDashboardStages();
+  }
+
+  @Get('dashboard/stages/:status/cases')
+  async casesByStage(
+    @Req() req,
+    @Param('status') status: string,
+    @Query('page') page = '1',
+    @Query('limit') limit = '20',
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getCasesByStage(
+      status,
+      Number(page) || 1,
+      Number(limit) || 20,
+    );
+  }
+
+  // ------------------- Cases -------------------
+  @Get('cases')
+  async listCases(
+    @Req() req,
+    @Query('page') page = '1',
+    @Query('limit') limit = '50',
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.listCases(
+      Number(page) || 1,
+      Number(limit) || 50,
+      status,
+      search,
+    );
+  }
+
+  // ------------------- Settings -------------------
+  @Get('settings/topbar')
+  async getTopbarSettings() {
+    const settings = await this.adminService.getSettings();
+    return {
+      topBar1Enabled: settings.topBar1Enabled ?? true,
+      topBar1Text: settings.topBar1Text ?? '',
+      topBar2Enabled: settings.topBar2Enabled ?? true,
+      topBar2Text: settings.topBar2Text ?? '',
+      topBar: settings.topBar ?? [],
+    };
+  }
+
+  @Get('settings')
+  async getSettings(@Req() req) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.getSettings();
+  }
+
+  @Patch('settings')
+  async updateSettingsPatch(@Req() req, @Body() body: any) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateSettings(body);
+  }
+
+  @Put('settings')
+  async updateSettingsPut(@Req() req, @Body() body: any) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateSettings(body);
+  }
+
+  // ------------------- Users -------------------
   @Get('users')
   async listUsers(
     @Req() req,
@@ -114,7 +203,6 @@ export class AdminController {
     return this.adminService.listCompanies(Number(limit) || 50, Number(page) || 1);
   }
 
-  /** Get company detail + its attachments + notes (view) */
   @Get('companies/:id')
   async getCompany(@Req() req, @Param('id') id: string) {
     const user = this.ensureUser(req);
@@ -126,7 +214,52 @@ export class AdminController {
   async createCompany(@Req() req, @Body() body: CreateCompanyDto) {
     const user = this.ensureUser(req);
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.createCompany(body);
+    return this.adminService.createCompany(body, user.id || user._id);
+  }
+
+  @Patch('companies/:id')
+  async updateCompany(@Req() req, @Param('id') id: string, @Body() body: CreateCompanyDto) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateCompany(id, body);
+  }
+
+  @Post('companies/:id/documents')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_COMPANY_FILE_BYTES } }))
+  async addCompanyDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: CreateCompanyDocumentDto,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.addCompanyDocument(id, file, body, user.id || user._id);
+  }
+
+  @Get('companies/:id/documents/:docId/download')
+  async downloadCompanyDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('docId') docId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    const file = await this.adminService.getCompanyDocumentFile(id, docId);
+    res.set({
+      'Content-Type': file.mimeType,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(file.buffer);
+  }
+
+  @Delete('companies/:id/documents/:docId')
+  async deleteCompanyDocument(@Req() req, @Param('id') id: string, @Param('docId') docId: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.deleteCompanyDocument(id, docId);
   }
 
   @Patch('companies/:id/verify')
@@ -218,7 +351,6 @@ export class AdminController {
     return this.adminService.listLawyers(Number(limit) || 50, Number(page) || 1);
   }
 
-  /** Get lawyer detail + attachments + notes (view) */
   @Get('lawyers/:id')
   async getLawyer(@Req() req, @Param('id') id: string) {
     const user = this.ensureUser(req);
@@ -230,7 +362,80 @@ export class AdminController {
   async createLawyer(@Req() req, @Body() body: CreateLawyerDto) {
     const user = this.ensureUser(req);
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.createLawyer(body);
+    return this.adminService.createLawyer(body, user.id || user._id);
+  }
+
+  @Patch('lawyers/:id')
+  async updateLawyer(@Req() req, @Param('id') id: string, @Body() body: CreateLawyerDto) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.updateLawyer(id, body);
+  }
+
+  @Post('lawyers/:id/photo')
+  @UseInterceptors(FileInterceptor('photo', { limits: { fileSize: MAX_LAWYER_PHOTO_BYTES } }))
+  async setLawyerPhoto(@Req() req, @Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.setLawyerPhoto(id, file);
+  }
+
+  @Get('lawyers/:id/photo')
+  async getLawyerPhoto(@Req() req, @Param('id') id: string, @Res({ passthrough: true }) res: Response) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    const photo = await this.adminService.getLawyerPhoto(id);
+    res.set({
+      'Content-Type': photo.mimeType,
+      'Cache-Control': 'private, max-age=300',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(photo.buffer);
+  }
+
+  @Delete('lawyers/:id/photo')
+  async removeLawyerPhoto(@Req() req, @Param('id') id: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.removeLawyerPhoto(id);
+  }
+
+  @Post('lawyers/:id/documents')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_COMPANY_FILE_BYTES } }))
+  async addLawyerDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: CreateLawyerDocumentDto,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.addLawyerDocument(id, file, body, user.id || user._id);
+  }
+
+  @Get('lawyers/:id/documents/:docId/download')
+  async downloadLawyerDocument(
+    @Req() req,
+    @Param('id') id: string,
+    @Param('docId') docId: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    const file = await this.adminService.getLawyerDocumentFile(id, docId);
+    res.set({
+      'Content-Type': file.mimeType,
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return new StreamableFile(file.buffer);
+  }
+
+  @Delete('lawyers/:id/documents/:docId')
+  async deleteLawyerDocument(@Req() req, @Param('id') id: string, @Param('docId') docId: string) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.deleteLawyerDocument(id, docId);
   }
 
   @Patch('lawyers/:id/verify')
@@ -247,161 +452,34 @@ export class AdminController {
     return this.adminService.archiveLawyer(id, user.id || user._id);
   }
 
-  // -- Lawyer Attachments --
+  // ------------------- Case Managers -------------------
+  @Get('case-managers')
+  async listCaseManagers(@Req() req, @Query('page') page = '1', @Query('limit') limit = '50') {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user) && user?.role !== 'case_manager') throw new BadRequestException('Admin or Case Manager only');
+    return this.adminService.listCaseManagers(Number(limit) || 50, Number(page) || 1);
+  }
 
-  @Post('lawyers/:id/attachments')
-  @UseInterceptors(FileInterceptor('file'))
-  async addLawyerAttachment(
+  @Post('case-managers')
+  async createCaseManager(@Req() req, @Body() body: CreateCaseManagerDto) {
+    const user = this.ensureUser(req);
+    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
+    return this.adminService.createCaseManager(body);
+  }
+
+  @Patch('case-managers/:id/jurisdiction')
+  async updateCaseManagerJurisdiction(
     @Req() req,
     @Param('id') id: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Body('fileUrl') fileUrl: string,
+    @Body('jurisdiction') jurisdiction: string,
+    @Body('primaryJurisdiction') primaryJurisdiction?: string,
   ) {
     const user = this.ensureUser(req);
     if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    if (!file) throw new BadRequestException('File is required');
-    const resolvedUrl = fileUrl || file.originalname;
-    return this.adminService.addLawyerAttachment(id, file, resolvedUrl, user.id || user._id);
-  }
-
-  @Get('lawyers/:id/attachments')
-  async getLawyerAttachments(@Req() req, @Param('id') id: string) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getLawyerAttachments(id);
-  }
-
-  @Delete('lawyers/:id/attachments/:attachmentId')
-  async deleteLawyerAttachment(
-    @Req() req,
-    @Param('id') id: string,
-    @Param('attachmentId') attachmentId: string,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.deleteLawyerAttachment(id, attachmentId);
-  }
-
-  // -- Lawyer Notes --
-
-  @Post('lawyers/:id/notes')
-  async addLawyerNote(
-    @Req() req,
-    @Param('id') id: string,
-    @Body() body: AddLawyerNoteDto,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.addLawyerNote(id, body.content, user.id || user._id);
-  }
-
-  @Get('lawyers/:id/notes')
-  async getLawyerNotes(@Req() req, @Param('id') id: string) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getLawyerNotes(id);
-  }
-
-  @Delete('lawyers/:id/notes/:noteId')
-  async deleteLawyerNote(
-    @Req() req,
-    @Param('id') id: string,
-    @Param('noteId') noteId: string,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.deleteLawyerNote(id, noteId);
-  }
-
-  // =============================================
-  // ADMIN SETTINGS  (Section 1 – TopBar)
-  // =============================================
-
-  /** GET /admin/settings  – retrieve current TopBar settings */
-  @Get('settings')
-  async getSettings(@Req() req) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getAdminSettings();
-  }
-
-  /** PATCH /admin/settings  – update any subset of TopBar settings */
-  @Patch('settings')
-  async updateSettings(@Req() req, @Body() body: UpdateAdminSettingsDto) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.updateAdminSettings(body);
-  }
-
-  // =============================================
-  // DASHBOARD  (same as Case-Manager)
-  // =============================================
-
-  /** GET /admin/dashboard  – high-level KPI counts */
-  @Get('dashboard')
-  async getDashboard(@Req() req) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getDashboard();
-  }
-
-  /** GET /admin/dashboard/stages  – cases grouped by workflow status */
-  @Get('dashboard/stages')
-  async getStageSummary(@Req() req) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getStageSummary();
-  }
-
-  /** GET /admin/dashboard/stages/:status/cases */
-  @Get('dashboard/stages/:status/cases')
-  async getCasesByStatus(@Req() req, @Param('status') status: string) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getCasesByStatus(status);
-  }
-
-  // =============================================
-  // CASES  (same as Case-Manager – admin sees all)
-  // =============================================
-
-  /** GET /admin/cases  – paginated list of all cases */
-  @Get('cases')
-  async getAllCases(
-    @Req() req,
-    @Query('page') page = '1',
-    @Query('limit') limit = '50',
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getAllCases(Number(limit) || 50, Number(page) || 1);
-  }
-
-  ps;;ss;;s;pee/** GET /admin/cases/:caseId  – single case detail */
-  @Get('cases/:caseId')
-  async getCaseById(@Req() req, @Param('caseId') caseId: string) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getCaseById(caseId);
-  }
-
-  // =============================================
-  // REPORTS
-  // =============================================
-
-  /**
-   * GET /admin/reports
-   * Query params: from (ISO date), to (ISO date)
-   * Returns: casesByStatus, newCasesOverTime, lawyerAssignments
-   */
-  @Get('reports')
-  async getReports(
-    @Req() req,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-  ) {
-    const user = this.ensureUser(req);
-    if (!this.isAdmin(user)) throw new BadRequestException('Admin only');
-    return this.adminService.getReports(from, to);
+    return this.adminService.updateCaseManagerJurisdiction(
+      id,
+      jurisdiction,
+      primaryJurisdiction,
+    );
   }
 }

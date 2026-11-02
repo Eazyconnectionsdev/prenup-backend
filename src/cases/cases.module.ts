@@ -22,6 +22,11 @@ import {
 } from './schemas/case_backup.schema';
 
 import {
+  CaseAuditLog,
+  CaseAuditLogSchema,
+} from './schemas/case_audit_logs.schema';
+
+import {
   Counter,
   CounterSchema,
 } from '../common/schemas/counter.schema';
@@ -32,6 +37,11 @@ import {
 } from '../users/schemas/user.schema';
 
 import { CompaniesService } from './companies/companies.service';
+import {
+  PartnerInvite,
+  PartnerInviteSchema,
+} from './schemas/partner_invite.schema';
+import { PartnerInviteService } from './partner-invite.service';
 import { CasesService } from './cases.service';
 import { CasesController } from './cases.controller';
 
@@ -69,8 +79,18 @@ import { LawyerModule } from './lawyer-manager/lawyer.module';
       },
 
       {
+        name: PartnerInvite.name,
+        schema: PartnerInviteSchema,
+      },
+
+      {
         name: Counter.name,
         schema: CounterSchema,
+      },
+
+      {
+        name: CaseAuditLog.name,
+        schema: CaseAuditLogSchema,
       },
     ]),
 
@@ -84,6 +104,7 @@ import { LawyerModule } from './lawyer-manager/lawyer.module';
 
   providers: [
     CasesService,
+    PartnerInviteService,
     CompaniesService,
 
   ],
@@ -94,6 +115,7 @@ import { LawyerModule } from './lawyer-manager/lawyer.module';
 
   exports: [
     CasesService,
+    PartnerInviteService,
     CompaniesService,
   ],
 })

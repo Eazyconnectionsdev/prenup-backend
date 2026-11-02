@@ -1,11 +1,10 @@
-// src/utils/get-location.ts
 import axios from 'axios';
 
 export interface GeoLocation {
   country: string | null;
   region: string | null;
   city: string | null;
-  ll: number[] | null; // [lat, lng]
+  ll: number[] | null;
   postal: string | null;
   timezone: string | null;
   geonameId: number | null;
