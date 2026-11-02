@@ -9,12 +9,6 @@ import { ConfigService } from '@nestjs/config';
 import { Company, CompanyDocument, COMPANY_FILE_CATEGORIES } from './schemas/company.schema';
 import { Lawyer, LawyerDocument, LAWYER_FILE_CATEGORIES } from './schemas/lawyer.schema';
 import { Enquiry, EnquiryDocument } from './schemas/enquiry.schema';
-import { AdminSettings, AdminSettingsDocument } from './schemas/admin-settings.schema';
-import { CompanyAttachment, CompanyAttachmentDocument } from './schemas/company-attachment.schema';
-import { CompanyNote, CompanyNoteDocument } from './schemas/company-note.schema';
-import { LawyerAttachment, LawyerAttachmentDocument } from './schemas/lawyer-attachment.schema';
-import { LawyerNote, LawyerNoteDocument } from './schemas/lawyer-note.schema';
-
 import { CreateLawyerDto } from './dto/create-lawyer.dto';
 import { CreateLawyerDocumentDto } from './dto/create-lawyer-document.dto';
 import { CreateCaseManagerDto } from './dto/create-case-manager.dto';
@@ -299,7 +293,7 @@ export class AdminService {
   }
 
   // =============================================
-  // COMPANIES (Section 2 – with attachments & notes)
+  // COMPANIES
   // =============================================
 
   async listCompanies(limit = 50, page = 1) {
