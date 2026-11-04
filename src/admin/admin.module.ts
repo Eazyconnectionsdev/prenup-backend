@@ -8,9 +8,15 @@ import { Enquiry, EnquirySchema } from './schemas/enquiry.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Case, CaseSchema } from '../cases/schemas/case.schema';
 import { Settings, SettingsSchema } from './schemas/settings.schema';
+import { S3Module } from '../s3/s3.module';
+import { AuthModule } from '../auth/auth.module';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
+    S3Module,
+    AuthModule,
+    MailModule,
     MongooseModule.forFeature([
       { name: Company.name, schema: CompanySchema },
       { name: Lawyer.name, schema: LawyerSchema },

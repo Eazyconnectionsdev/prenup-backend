@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   PutObjectCommandInput,
@@ -106,6 +107,24 @@ export class S3Service {
         }
         throw new InternalServerErrorException(
           `Failed to fetch "${fileName}" from S3: ${error.message}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async deleteFromBucket(fileName: string): Promise<void> {
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({
+          Bucket: Config.aws.s3.bucketName,
+          Key: fileName,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof S3ServiceException) {
+        throw new InternalServerErrorException(
+          `Failed to delete "${fileName}" from S3: ${error.message}`,
         );
       }
       throw error;

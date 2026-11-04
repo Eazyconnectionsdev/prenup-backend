@@ -1,7 +1,10 @@
 // src/cases/cases.controller.ts
 import {
   Body,
+  Put,
+  Patch,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
@@ -15,8 +18,12 @@ import {
 import { JwtAuthGuard } from '../common/jwt-auth.guard';
 
 import { CasesService } from './cases.service';
+import { PartnerLinkConflictOutcome } from './schemas/partner_invite.schema';
 
 import { CreateCaseDto } from './dto/create-case.dto';
+import { RemovePartnerDto } from './dto/remove-partner.dto';
+import { DeleteInviteeAccountDto } from './dto/delete-invitee-account.dto';
+import { ResolvePartnerConflictDto } from './dto/resolve-partner-conflict.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
@@ -61,8 +68,11 @@ export class CasesController {
   }
 
   // ============================================================
-  // CREATE CASE
+  // START A LEGAL MATTER
   // POST /cases
+  //
+  // This is the only place a Case ID is issued for a client.
+  // Idempotent: a client who already has a current case gets it back.
   // ============================================================
 
   @UseGuards(JwtAuthGuard)
@@ -75,8 +85,8 @@ export class CasesController {
 
     const title = body.title;
 
-    return this.casesService.create(
-      user.id,
+    return this.casesService.startCase(
+      (user.id ?? user._id).toString(),
       title,
     );
   }
@@ -114,7 +124,7 @@ export class CasesController {
     @Req() req: any,
     @Param('id') id: string,
   ) {
-    this.ensureUser(req);
+    const user = this.ensureUser(req);
 
     const c =
       await this.casesService.findById(
@@ -128,7 +138,34 @@ export class CasesController {
       );
     }
 
-    return c;
+    // Staff, the owner, the partner and the assigned lawyers only.
+    await this.casesService.assertCanViewCase(c, user);
+
+    const doc: any = (c as any).toObject ? (c as any).toObject() : c;
+    try {
+      doc.stages = await this.casesService.getCaseStages(id);
+    } catch {
+      // stages optional fallback
+    }
+
+    return doc;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/stages')
+  async getStages(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    const c = await this.casesService.findById(id);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+    await this.casesService.assertCanViewCase(c, user);
+
+    return this.casesService.getCaseStages(id);
   }
 
   // ============================================================
@@ -143,16 +180,6 @@ export class CasesController {
     @Param('id') id: string,
     @Body() dto: InvitePartnerDto,
   ) {
-    console.log(
-      'RAW BODY:',
-      req.body,
-    );
-
-    console.log(
-      'DTO:',
-      dto,
-    );
-
     const user =
       this.ensureUser(req);
 
@@ -243,26 +270,91 @@ export class CasesController {
       throw new ForbiddenException('Forbidden');
     }
 
-    return this.casesService.getInvite(id);
+    return this.casesService.getInvite(
+      id,
+      this.isPrivilegedRole(user.role),
+    );
   }
 
   // ============================================================
-  // ATTACH INVITED USER
-  // POST /cases/:id/attach-invited
+  // REMOVE PARTNER
+  // DELETE /cases/:id/partner
+  //
+  // Case Manager / Admin (or the owner, early on) unlinks the partner so a
+  // partner can be invited again. The partner's account is kept.
   // ============================================================
 
   @UseGuards(JwtAuthGuard)
-  @Post(':id/attach-invited')
-  async attachInvitedUser(
+  @Delete(':id/partner')
+  async removePartner(
     @Req() req: any,
     @Param('id') id: string,
+    @Body() dto: RemovePartnerDto,
   ) {
-    const user =
-      this.ensureUser(req);
+    const user = this.ensureUser(req);
 
-    return this.casesService.attachInvitedUser(
+    return this.casesService.removePartner(
       id,
-      user.id,
+      { id: (user.id ?? user._id).toString(), role: user.role },
+      dto?.reason,
+    );
+  }
+
+  // ============================================================
+  // DELETE THE INVITED PARTNER'S ACCOUNT (Case Manager / Admin)
+  // DELETE /cases/:id/invitee-account
+  //
+  // For a partner who already has an account that stops them joining through
+  // the invitation. The account is deactivated and its address freed, the
+  // partner is unlinked if they had joined, and a fresh invitation is emailed
+  // so they can register and join.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/invitee-account')
+  async deleteInviteeAccount(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: DeleteInviteeAccountDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.deleteInviteeAccount(
+      id,
+      { id: (user.id ?? user._id).toString(), role: user.role },
+      dto,
+    );
+  }
+
+  // ============================================================
+  // RESOLVE A HELD PARTNER LINK (Case Manager / Admin)
+  // POST /cases/:id/invite/resolve
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/invite/resolve')
+  async resolvePartnerConflict(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: ResolvePartnerConflictDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+
+    return this.casesService.resolvePartnerConflict(
+      id,
+      (user.id ?? user._id).toString(),
+      dto.action === 'APPROVE'
+        ? PartnerLinkConflictOutcome.APPROVED
+        : PartnerLinkConflictOutcome.REJECTED,
+      dto.note,
     );
   }
 
@@ -433,6 +525,14 @@ export class CasesController {
     const user =
       this.ensureUser(req);
 
+    // Nothing in the app calls this for a client; it is a staff correction.
+    // Letting any signed-in user mark any case paid would skip payment.
+    if (!this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException(
+        'Only a case manager or an admin can mark a case as paid',
+      );
+    }
+
     return this.casesService.markPaymentCompleted(
       id,
       user.id,
@@ -458,6 +558,76 @@ export class CasesController {
       id,
       user.id ?? user._id,
       message,
+    );
+  }
+
+  // ============================================================
+  // ASSIGN CASE MANAGER
+  // POST /cases/:id/assign-case-manager
+  // ============================================================
+
+  // ============================================================
+  // UPDATE CASE / PRIORITY
+  // PUT /cases/:id
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Put(':id')
+  async updateCase(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const user = this.ensureUser(req);
+    await this.assertOwnerOrStaff(id, user);
+    return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id')
+  async patchCase(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const user = this.ensureUser(req);
+    await this.assertOwnerOrStaff(id, user);
+    return this.casesService.updateCase(id, body, user.id ?? user._id);
+  }
+
+  // Changing a case's title or priority is for its owner and for staff.
+  private async assertOwnerOrStaff(caseId: string, user: any) {
+    const c = await this.casesService.findById(caseId);
+    if (!c) {
+      throw new NotFoundException('Case not found');
+    }
+    const isOwner = c.owner?.toString() === (user.id ?? user._id)?.toString();
+    if (!isOwner && !this.isPrivilegedRole(user.role)) {
+      throw new ForbiddenException('Forbidden');
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/assign-case-manager')
+  async assignCaseManager(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body('managerId') managerId: string,
+  ) {
+    const user = this.ensureUser(req);
+    const isPrivileged = this.isPrivilegedRole(user.role);
+
+    if (!isPrivileged) {
+      throw new ForbiddenException(
+        'Only admins or case managers may assign cases',
+      );
+    }
+
+    return this.casesService.assignCaseManager(
+      id,
+      managerId,
+      user.id ?? user._id,
+      user.role,
     );
   }
 
@@ -511,8 +681,11 @@ export class CasesController {
   @UseGuards(JwtAuthGuard)
   @Get(':id/status')
   async getStatus(
+    @Req() req: any,
     @Param('id') id: string,
   ) {
+    const user = this.ensureUser(req);
+
     const c =
       await this.casesService.findById(
         id,
@@ -521,6 +694,8 @@ export class CasesController {
     if (!c) {
       throw new NotFoundException('Case not found');
     }
+
+    await this.casesService.assertCanViewCase(c, user);
 
     return {
       workflowStatus: c.workflowStatus,

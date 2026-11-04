@@ -1,7 +1,14 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { AuditLogService } from './audit-log.service';
+import { JwtAuthGuard } from '../jwt-auth.guard';
+import { Roles } from '../roles.decorator';
+import { RolesGuard } from '../roles.guard';
 
+// Case timelines and user activity are staff-only; these routes used to answer
+// to anyone, signed in or not.
 @Controller('audit-logs')
+@Roles('superadmin', 'admin', 'case_manager')
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class AuditLogController {
   constructor(private readonly auditLogService: AuditLogService) {}
 

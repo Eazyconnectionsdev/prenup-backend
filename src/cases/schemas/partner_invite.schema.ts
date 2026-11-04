@@ -9,6 +9,26 @@ export enum PartnerInviteStatus {
   ACCEPTED = 'ACCEPTED', // partner registered
   EXPIRED = 'EXPIRED',
   REVOKED = 'REVOKED', // replaced by an invite to a different email
+  REMOVED = 'REMOVED', // partner joined, then was unlinked by staff/owner
+}
+
+export enum PartnerLinkConflictOutcome {
+  APPROVED = 'APPROVED', // staff allowed the link; the partner's own case is set aside
+  REJECTED = 'REJECTED', // staff refused the link; the invite is revoked
+}
+
+// Raised when the invited person already has a case holding data/payment.
+// The link is held until a Case Manager / Admin decides; nothing is merged
+// or deleted automatically.
+export interface PartnerLinkConflict {
+  userId: Types.ObjectId;
+  existingCaseId: Types.ObjectId;
+  reasons: string[];
+  flaggedAt: Date;
+  resolvedAt?: Date | null;
+  resolvedBy?: Types.ObjectId | null;
+  outcome?: PartnerLinkConflictOutcome | null;
+  note?: string | null;
 }
 
 // What the inviter typed. Never overwritten by the partner's own details.
@@ -93,6 +113,20 @@ export class PartnerInvite {
 
   @Prop({ type: Boolean, default: null })
   nameMatchedInvite?: boolean | null;
+
+  // Set when the partner is unlinked after joining (REMOVED).
+  @Prop({ type: Date, default: null })
+  removedAt?: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  removedBy?: Types.ObjectId | null;
+
+  @Prop({ type: String, default: null })
+  removalReason?: string | null;
+
+  // The invited person already has their own case with data or payment.
+  @Prop({ type: Object, default: null })
+  conflict?: PartnerLinkConflict | null;
 }
 
 export const PartnerInviteSchema = SchemaFactory.createForClass(PartnerInvite);

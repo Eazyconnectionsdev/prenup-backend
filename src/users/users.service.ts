@@ -52,6 +52,10 @@ export class UsersService {
     if (!email) return null;
     return this.userModel
       .findOne({ email: email.toLowerCase() })
+      // The sign-in, OTP and reset flows read these; they are hidden everywhere else.
+      .select(
+        '+passwordHash +resetPasswordToken +resetPasswordExpires +emailVerificationOtp +emailVerificationOtpExpires',
+      )
       .populate([
         {
           path: 'invitedUser',
@@ -94,6 +98,10 @@ export class UsersService {
       throw new BadRequestException('Password required for hashing');
     const salt = await bcrypt.genSalt(this.bcryptSaltRounds);
     return bcrypt.hash(password, salt);
+  }
+
+  async recordLogin(userId: string): Promise<void> {
+    await this.userModel.updateOne({ _id: userId }, { $set: { lastLoginAt: new Date() } }).exec();
   }
 
   // Compare password
