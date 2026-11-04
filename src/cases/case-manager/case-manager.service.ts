@@ -9,7 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
-import { Case, CaseWorkflowStatus } from '../schemas/case.schema';
+import { Case, CaseWorkflowStatus, MutualApprovalStatus } from '../schemas/case.schema';
 import { Lawyer } from '../schemas/lawyer.schema';
 
 import { ReturnDraftDto } from './dto/return-draft.dto';
@@ -1173,20 +1173,105 @@ export class CaseManagerService {
   async getCasesByStatus(
     userId: string,
     status: string,
+    role?: string,
   ) {
+    // Safe query: use $and to avoid $or key collision
+    const eligibilityOrClauses = [
+      { 'approval.user1Approved': true, 'approval.user2Approved': true },
+      { 'approval.mutualApprovalAndSnapshot': MutualApprovalStatus.COMPLETED },
+      {
+        workflowStatus: {
+          $in: [
+            CaseWorkflowStatus.COUPLE_SUBMITTED,
+            CaseWorkflowStatus.CM_APPROVED,
+            CaseWorkflowStatus.PRE_LAWYER_PENDING,
+            CaseWorkflowStatus.PRE_LAWYER_COMPLETED,
+            CaseWorkflowStatus.LAWYERS_ASSIGNED,
+            CaseWorkflowStatus.LAWYER_CLIENT_CONFIRMATION,
+            CaseWorkflowStatus.LAWYER_REVIEW,
+            CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED,
+            CaseWorkflowStatus.LAWYER_ILA_PENDING,
+            CaseWorkflowStatus.LAWYER_SIGNOFF_COMPLETE,
+            CaseWorkflowStatus.COMPLETED,
+            CaseWorkflowStatus.ARCHIVED,
+          ],
+        },
+      },
+    ];
+
+    const statusQuery: any = { partnerInvited: true, workflowStatus: status };
+
+    if (role !== 'superadmin' && role !== 'admin' && userId) {
+      const managerId = Types.ObjectId.isValid(userId) ? new Types.ObjectId(userId) : userId;
+      statusQuery.$and = [
+        { $or: eligibilityOrClauses },
+        {
+          $or: [
+            { assignedCaseManager: null },
+            { assignedCaseManager: { $exists: false } },
+            { assignedCaseManager: managerId },
+          ],
+        },
+      ];
+    } else {
+      statusQuery.$or = eligibilityOrClauses;
+    }
+
     return this.caseModel
-      .find({
-        assignedCaseManager: new Types.ObjectId(userId),
-        workflowStatus: status,
-      })
+      .find(statusQuery)
       .populate('owner invitedUser assignedCaseManager')
       .sort({ createdAt: -1 })
       .exec();
   }
 
-  async getAllCases(userId: string) {
+  async getAllCases(userId: string, role?: string) {
+    // Safe query: use $and to avoid $or key collision
+    // Only show: partnerInvited=true AND final-review accepted
+    const allEligibilityOrClauses = [
+      { 'approval.user1Approved': true, 'approval.user2Approved': true },
+      { 'approval.mutualApprovalAndSnapshot': MutualApprovalStatus.COMPLETED },
+      {
+        workflowStatus: {
+          $in: [
+            CaseWorkflowStatus.COUPLE_SUBMITTED,
+            CaseWorkflowStatus.CM_APPROVED,
+            CaseWorkflowStatus.PRE_LAWYER_PENDING,
+            CaseWorkflowStatus.PRE_LAWYER_COMPLETED,
+            CaseWorkflowStatus.LAWYERS_ASSIGNED,
+            CaseWorkflowStatus.LAWYER_CLIENT_CONFIRMATION,
+            CaseWorkflowStatus.LAWYER_REVIEW,
+            CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED,
+            CaseWorkflowStatus.LAWYER_ILA_PENDING,
+            CaseWorkflowStatus.LAWYER_SIGNOFF_COMPLETE,
+            CaseWorkflowStatus.COMPLETED,
+            CaseWorkflowStatus.ARCHIVED,
+          ],
+        },
+      },
+    ];
+
+    // Superadmin / admin can see all eligible cases.
+    // A case_manager sees only their own assigned cases + unassigned eligible cases.
+    const allQuery: any = { partnerInvited: true };
+
+    if (role !== 'superadmin' && role !== 'admin' && userId) {
+      const managerId = Types.ObjectId.isValid(userId) ? new Types.ObjectId(userId) : userId;
+      allQuery.$and = [
+        { $or: allEligibilityOrClauses },
+        {
+          $or: [
+            { assignedCaseManager: null },
+            { assignedCaseManager: { $exists: false } },
+            { assignedCaseManager: managerId },
+          ],
+        },
+      ];
+    } else {
+      allQuery.$or = allEligibilityOrClauses;
+    }
+
     return this.caseModel
-      .find({})
+      .find(allQuery)
       .populate('owner invitedUser assignedCaseManager')
       .sort({ createdAt: -1 })
       .exec();
