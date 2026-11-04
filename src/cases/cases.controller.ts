@@ -105,7 +105,7 @@ export class CasesController {
       this.isPrivilegedRole(user.role);
 
     if (isPrivileged) {
-      return this.casesService.findAll();
+      return this.casesService.findAll({ id: (user.id ?? user._id)?.toString(), role: user.role });
     }
 
     return this.casesService.findByUser(
