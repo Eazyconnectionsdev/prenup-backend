@@ -165,6 +165,7 @@ export class CasesService {
   private makeEmptyPreQuestionnaire(): PreQuestionnaire {
     return {
       answers: [],
+      responses: {},
       selectedLawyer: null,
       submitted: false,
       submittedBy: null,
@@ -246,9 +247,21 @@ export class CasesService {
     if (!Types.ObjectId.isValid(id)) return null;
     const q = this.caseModel.findById(id);
     if (populate) {
-      q.populate(
-        'owner invitedUser preQuestionnaireUser1.selectedLawyer preQuestionnaireUser2.selectedLawyer assignedCaseManager',
-      );
+      q.populate([
+        { path: 'owner' },
+        { path: 'invitedUser' },
+        { path: 'assignedCaseManager', select: 'firstName lastName email role' },
+        // The chosen solicitor is shown with their firm, so pull the company
+        // through too -- a bare populate leaves `company` as an id.
+        {
+          path: 'preQuestionnaireUser1.selectedLawyer',
+          populate: { path: 'company', select: 'name' },
+        },
+        {
+          path: 'preQuestionnaireUser2.selectedLawyer',
+          populate: { path: 'company', select: 'name' },
+        },
+      ]);
     }
     return q.exec();
   }
@@ -534,6 +547,25 @@ export class CasesService {
       }
     }
 
+    // Everything is read-only for the partner who is waiting: either the
+    // sender while the request is being reviewed, or the other partner while
+    // whoever sent it back is making their changes. Either partner's
+    // information can be edited by the one who holds the pen.
+    if (!isPrivileged && !isJointStep) {
+      const pending = this.isJointReviewPending(c);
+      const sender = c.status?.jointInformation?.submittedBy?.toString();
+      const editor = (c as any).approval?.disapprovedBy?.toString();
+      const me = actorId.toString();
+      if (
+        (pending && sender === me) ||
+        (!pending && editor && editor !== me)
+      ) {
+        throw new BadRequestException(
+          'Your information is locked while your partner reviews or edits it',
+        );
+      }
+    }
+
     const { section, field } = config;
     (c as any)[section] = (c as any)[section] || {};
     (c as any)[section][field] = data;
@@ -581,6 +613,7 @@ export class CasesService {
   async submitJointInformationForReview(
     caseId: string,
     actorId: string,
+    message?: string,
   ): Promise<CaseDocument> {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
@@ -603,6 +636,17 @@ export class CasesService {
     if (this.isJointReviewPending(c)) {
       throw new BadRequestException(
         'This section is already pending review by the other party',
+      );
+    }
+
+    // A partner who sent the case back to make changes has to say why when
+    // they send it again.
+    const sentBackByMe =
+      (c as any).approval?.disapprovedBy?.toString() === actorId.toString();
+    const trimmedMessage = (message ?? '').trim();
+    if (sentBackByMe && !trimmedMessage) {
+      throw new BadRequestException(
+        'Please add a message for your partner explaining what you changed',
       );
     }
 
@@ -658,9 +702,17 @@ export class CasesService {
       approval.user1ApprovedAt = null;
     }
 
-    approval.disapprovedBy = null;
-    approval.disapprovedAt = null;
-    approval.disapprovalReason = null;
+    // The message travels with the changes; a plain first request carries
+    // none.
+    if (sentBackByMe) {
+      approval.disapprovedBy = new Types.ObjectId(actorId);
+      approval.disapprovedAt = now;
+      approval.disapprovalReason = trimmedMessage;
+    } else {
+      approval.disapprovedBy = null;
+      approval.disapprovedAt = null;
+      approval.disapprovalReason = null;
+    }
 
     await c.save();
     return c;
@@ -846,57 +898,91 @@ async rejectCaseByUser(
     if (!updated) throw new NotFoundException('Case not found');
     return updated;
   }
-  // submitPreQuestionnaire
-  async submitPreQuestionnaire(
-    caseId: string,
-    actorId: string,
-    answers: string[],
-  ): Promise<CaseDocument> {
-    if (!Types.ObjectId.isValid(caseId))
-      throw new BadRequestException('Invalid case id');
-    if (!Array.isArray(answers))
-      throw new BadRequestException('Answers must be an array');
+  /**
+   * The independent-legal-advice stage opens only once both partners have
+   * confirmed the agreement and the case manager has approved it — the same
+   * moment `approveCaseByManager` moves the case to LAWYERS_ASSIGNED.
+   */
+  private assertPreLawyerStageOpen(c: CaseDocument) {
+    const a: any = c.approval ?? {};
+    const handshakeDone = Boolean(a.user1Approved && a.user2Approved);
 
-    const c = await this.caseModel.findById(caseId).exec();
-    if (!c) throw new NotFoundException('Case not found');
-
-    // enforce workflow state
-    if (c.workflowStatus !== CaseWorkflowStatus.LAWYERS_ASSIGNED) {
+    if (!handshakeDone) {
       throw new ForbiddenException(
-        'Pre-questionnaire cannot be submitted: case not in LAWYER Selection state',
+        'Both partners must confirm the agreement before this step opens',
       );
     }
+    if (!a.caseManagerApproved) {
+      throw new ForbiddenException(
+        'Your case manager has not approved the case yet',
+      );
+    }
+  }
 
+  /** Resolve which of the two pre-questionnaire slots belongs to the actor. */
+  private preQuestionnaireSlotFor(
+    c: CaseDocument,
+    actorId: string,
+  ): 'preQuestionnaireUser1' | 'preQuestionnaireUser2' {
     if (!Types.ObjectId.isValid(actorId))
       throw new BadRequestException('Invalid actor id');
     const actorObjId = new Types.ObjectId(actorId);
 
-    const ownerIsObj = c.owner instanceof Types.ObjectId;
-    const isOwner =
-      ownerIsObj && (c.owner as Types.ObjectId).equals(actorObjId);
-    const isInvited =
-      c.invitedUser instanceof Types.ObjectId &&
-      (c.invitedUser as Types.ObjectId).equals(actorObjId);
-    if (!isOwner && !isInvited)
-      throw new ForbiddenException('Actor not part of this case');
+    const ownerId = (c.owner as any)?._id ?? c.owner;
+    const invitedId = (c.invitedUser as any)?._id ?? c.invitedUser;
+
+    if (ownerId && actorObjId.equals(ownerId)) return 'preQuestionnaireUser1';
+    if (invitedId && actorObjId.equals(invitedId))
+      return 'preQuestionnaireUser2';
+
+    throw new ForbiddenException('Actor not part of this case');
+  }
+
+  // submitPreQuestionnaire
+  async submitPreQuestionnaire(
+    caseId: string,
+    actorId: string,
+    data: { answers?: string[]; responses?: Record<string, any> },
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
+
+    const answers = data?.answers;
+    if (answers !== undefined && !Array.isArray(answers))
+      throw new BadRequestException('Answers must be an array');
+
+    const responses = data?.responses;
+    if (
+      responses !== undefined &&
+      (typeof responses !== 'object' || Array.isArray(responses) || !responses)
+    )
+      throw new BadRequestException('Responses must be an object');
+
+    const c = await this.caseModel.findById(caseId).exec();
+    if (!c) throw new NotFoundException('Case not found');
+
+    this.assertPreLawyerStageOpen(c);
+
+    const slot = this.preQuestionnaireSlotFor(c, actorId);
+    const actorObjId = new Types.ObjectId(actorId);
+    const isOwner = slot === 'preQuestionnaireUser1';
+
+    if (!c[slot]) c[slot] = this.makeEmptyPreQuestionnaire() as any;
+
+    const entry = c[slot];
+    if (entry.locked) {
+      throw new ForbiddenException(
+        'Your pre-lawyer questionnaire has been locked',
+      );
+    }
 
     const now = new Date();
-    if (isOwner) {
-      if (!c.preQuestionnaireUser1)
-        c.preQuestionnaireUser1 = this.makeEmptyPreQuestionnaire() as any;
-      c.preQuestionnaireUser1.answers = answers ?? [];
-      c.preQuestionnaireUser1.submitted = true;
-      c.preQuestionnaireUser1.submittedBy = actorObjId;
-      c.preQuestionnaireUser1.submittedAt = now;
-    } else {
-      if (!c.preQuestionnaireUser2)
-        c.preQuestionnaireUser2 = this.makeEmptyPreQuestionnaire() as any;
-
-      c.preQuestionnaireUser2.answers = answers ?? [];
-      c.preQuestionnaireUser2.submitted = true;
-      c.preQuestionnaireUser2.submittedBy = actorObjId;
-      c.preQuestionnaireUser2.submittedAt = now;
-    }
+    entry.answers = answers ?? entry.answers ?? [];
+    entry.responses = responses ?? entry.responses ?? {};
+    entry.submitted = true;
+    entry.submittedBy = actorObjId;
+    entry.submittedAt = now;
+    c.markModified(slot);
 
     await c.save();
 
@@ -1046,6 +1132,63 @@ ${taskLines.join('\n\n')}`;
     }
 
     return c;
+  }
+
+  /**
+   * Record the solicitor one partner has chosen for their independent legal
+   * advice. Each party must instruct their own solicitor, so the two slots
+   * cannot hold the same lawyer.
+   */
+  async selectLawyerForCase(
+    caseId: string,
+    actorId: string,
+    lawyerId: string,
+  ): Promise<CaseDocument> {
+    if (!Types.ObjectId.isValid(caseId))
+      throw new BadRequestException('Invalid case id');
+    if (!lawyerId || !Types.ObjectId.isValid(lawyerId))
+      throw new BadRequestException('Invalid lawyer id');
+
+    const c = await this.caseModel.findById(caseId).exec();
+    if (!c) throw new NotFoundException('Case not found');
+
+    this.assertPreLawyerStageOpen(c);
+
+    const slot = this.preQuestionnaireSlotFor(c, actorId);
+    const otherSlot =
+      slot === 'preQuestionnaireUser1'
+        ? 'preQuestionnaireUser2'
+        : 'preQuestionnaireUser1';
+
+    const lawyer = await this.lawyerModel.findById(lawyerId).lean().exec();
+    if (!lawyer) throw new NotFoundException('Lawyer not found');
+    if (lawyer.status && lawyer.status !== 'available') {
+      throw new BadRequestException(
+        'That solicitor is not currently accepting new clients',
+      );
+    }
+
+    const otherChoice = c[otherSlot]?.selectedLawyer;
+    if (otherChoice && otherChoice.toString() === lawyerId) {
+      throw new BadRequestException(
+        'Your partner has already chosen this solicitor. Each of you must instruct a different, independent solicitor.',
+      );
+    }
+
+    if (!c[slot]) c[slot] = this.makeEmptyPreQuestionnaire() as any;
+
+    const entry = c[slot];
+    if (entry.locked) {
+      throw new ForbiddenException('Your solicitor choice has been locked');
+    }
+
+    entry.selectedLawyer = new Types.ObjectId(lawyerId);
+    entry.selectedAt = new Date();
+    c.markModified(slot);
+
+    await c.save();
+
+    return (await this.findById(caseId, true)) ?? c;
   }
 
   async setInviteCredentials(

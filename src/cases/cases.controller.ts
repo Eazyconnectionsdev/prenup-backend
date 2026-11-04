@@ -344,6 +344,51 @@ export class CasesController {
   }
 
   // ============================================================
+  // PRE-LAWYER QUESTIONNAIRE (per party)
+  // POST /cases/:id/pre-lawyer-questionnaire
+  //
+  // Stores into preQuestionnaireUser1/2 depending on who the actor is, so
+  // each partner's answers stay their own.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/pre-lawyer-questionnaire')
+  async submitPreLawyerQuestionnaire(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { answers?: string[]; responses?: Record<string, any> },
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.submitPreQuestionnaire(
+      id,
+      (user.id ?? user._id)?.toString(),
+      body ?? {},
+    );
+  }
+
+  // ============================================================
+  // LAWYER SELECTION (per party)
+  // POST /cases/:id/select-lawyer
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/select-lawyer')
+  async selectLawyer(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { lawyerId?: string },
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.selectLawyerForCase(
+      id,
+      (user.id ?? user._id)?.toString(),
+      body?.lawyerId ?? '',
+    );
+  }
+
+  // ============================================================
   // UNLOCK CASE
   // POST /cases/:id/unlock
   // ============================================================
@@ -404,6 +449,7 @@ export class CasesController {
   async submitJointInformationForReview(
     @Req() req: any,
     @Param('id') id: string,
+    @Body('message') message?: string,
   ) {
     const user =
       this.ensureUser(req);
@@ -411,6 +457,7 @@ export class CasesController {
     return this.casesService.submitJointInformationForReview(
       id,
       user.id ?? user._id,
+      message,
     );
   }
 

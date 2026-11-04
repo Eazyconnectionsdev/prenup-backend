@@ -8,11 +8,16 @@ import { ConfigService } from '@nestjs/config';
 import { User, UserDocument } from './schemas/user.schema';
 import { NotFoundException } from '@nestjs/common';
 import { UpdateUserProfileDto } from './interface/update-user-profile.dto';
+import { UpdatePartnerProfileDto } from './interface/update-partner-profile.dto';
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
   private readonly bcryptSaltRounds: number;
+
+  /** Everything the partner-details screen may read — nothing sensitive. */
+  private static readonly PARTNER_FIELDS =
+    '_id firstName middleName lastName suffix dateOfBirth email phone emailVerified role endUserType';
 
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -210,4 +215,68 @@ async updateProfile(
 
   return user;
 }
+
+  // ── Partner (the other party on the same case) ─────────────────────────────
+
+  /**
+   * Resolve the partner linked to `userId`: the user they invited
+   * (`invitedUser`) or, when they are the invited party, the owner who invited
+   * them (`invitedBy`). Null when no partner has registered yet.
+   */
+  private async resolvePartnerId(
+    userId: string,
+  ): Promise<Types.ObjectId | null> {
+    if (!Types.ObjectId.isValid(userId))
+      throw new BadRequestException('Invalid user id');
+
+    const me = await this.userModel
+      .findById(new Types.ObjectId(userId))
+      .select('invitedUser invitedBy')
+      .lean()
+      .exec();
+
+    if (!me) throw new NotFoundException('User not found');
+
+    return (me.invitedUser ?? me.invitedBy ?? null) as Types.ObjectId | null;
+  }
+
+  /** Partner details for the profile settings screen. */
+  async getPartner(userId: string) {
+    const partnerId = await this.resolvePartnerId(userId);
+    if (!partnerId) return { partner: null };
+
+    const partner = await this.userModel
+      .findById(partnerId)
+      .select(UsersService.PARTNER_FIELDS)
+      .lean()
+      .exec();
+
+    return { partner: partner ?? null };
+  }
+
+  async updatePartnerProfile(
+    userId: string,
+    updateData: UpdatePartnerProfileDto,
+  ) {
+    const partnerId = await this.resolvePartnerId(userId);
+    if (!partnerId) {
+      throw new BadRequestException('No partner is linked to this account yet');
+    }
+
+    const partner = await this.userModel
+      .findByIdAndUpdate(
+        partnerId,
+        { $set: updateData },
+        { new: true, runValidators: true },
+      )
+      .select(UsersService.PARTNER_FIELDS)
+      .lean()
+      .exec();
+
+    if (!partner) {
+      throw new NotFoundException('Partner not found');
+    }
+
+    return { partner };
+  }
 }
