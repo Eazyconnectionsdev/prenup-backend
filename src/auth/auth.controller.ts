@@ -35,6 +35,7 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { UsersService } from '../users/users.service';
 import { LocationService } from '../common/location.service';
+import { SecurityEventService } from '../tracking/security-event.service';
 
 // import cookie helpers from same folder (adjust path if you put cookie.utils elsewhere)
 import { DEFAULT_COOKIE_OPTIONS, cookieOptionsWithMaxAge } from './cookie.utils';
@@ -47,6 +48,7 @@ export class AuthController {
     private usersService: UsersService,
     private partnerInviteService: PartnerInviteService,
     private locationService: LocationService,
+    private securityEvents: SecurityEventService,
   ) { }
 
   @Post('register')
@@ -67,19 +69,30 @@ export class AuthController {
 
     const user = await this.authService.validateUser(dto.email, dto.password);
     if (!user) {
+      // The reason is only recorded in the audit log; the response stays
+      // generic so it does not reveal which emails exist.
+      const known = await this.usersService.findByEmail(dto.email?.trim()).catch(() => null);
+      void this.securityEvents.loginFailed(
+        dto.email,
+        known ? 'Incorrect password' : 'Unknown email address',
+        known,
+      );
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.emailVerified) {
+      void this.securityEvents.loginFailed(dto.email, 'Email not verified', user);
       throw new UnauthorizedException('Email not verified. Please verify via OTP sent to your email.');
     }
 
     // Only reached with the right password, so this does not reveal which emails exist.
     if (user.active === false) {
+      void this.securityEvents.loginFailed(dto.email, 'Account deactivated', user);
       throw new UnauthorizedException('This account has been deactivated. Please contact support.');
     }
 
     void this.usersService.recordLogin((user._id as any).toString());
+    void this.securityEvents.loginSucceeded(user);
 
     // Capture login location (fire-and-forget)
     void this.locationService.capture(
@@ -175,7 +188,16 @@ export class AuthController {
   @Post('verify-otp')
   @HttpCode(200)
   async verifyOtp(@Body() dto: VerifyOtpDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp, req.ip);
+    let signed: Awaited<ReturnType<AuthService['verifyRegistrationOtp']>>;
+    try {
+      signed = await this.authService.verifyRegistrationOtp(dto.email, dto.otp, req.ip);
+    } catch (err) {
+      void this.securityEvents.loginFailed(
+        dto.email,
+        `Verification code rejected: ${(err as any)?.message || 'invalid'}`,
+      );
+      throw err;
+    }
 
     const token = signed.token;
     const expiresAt = signed.expiresAt;
@@ -190,6 +212,7 @@ export class AuthController {
     if (!userDoc) {
       throw new NotFoundException('User not found after verification');
     }
+    void this.securityEvents.loginSucceeded(userDoc);
 
     const userCase = await this.casesService.findByCaseId(userDoc.inviteCaseId);
 

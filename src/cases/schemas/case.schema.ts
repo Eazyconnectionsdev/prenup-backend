@@ -2,6 +2,7 @@
 
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { caseTrackingPlugin } from '../../tracking/case-tracking.plugin';
 
 export type CaseDocument = Case & Document;
 
@@ -236,6 +237,7 @@ export enum PaymentStatus {
   INITIATED = 'INITIATED',
   FAILED = 'FAILED',
   COMPLETED = 'COMPLETED',
+  PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED',
   REFUNDED = 'REFUNDED',
 }
 
@@ -715,6 +717,14 @@ export class Case {
     default: PaymentStatus.PENDING,
   })
   paymentStatus!: PaymentStatus;
+
+  // When the case was first paid. Set automatically by the case tracking
+  // plugin; older cases may not have it.
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  paidAt?: Date | null;
 
   // Chosen during onboarding (user 1 only).
   @Prop({
@@ -1274,3 +1284,6 @@ export const CaseSchema =
 // Sparse unique index so existing documents with caseNumber: null are not
 // forced to conflict while still preventing duplicate caseNumbers.
 CaseSchema.index({ caseNumber: 1 }, { unique: true, sparse: true });
+
+// Status, payment and assignment history for the audit reports.
+CaseSchema.plugin(caseTrackingPlugin);

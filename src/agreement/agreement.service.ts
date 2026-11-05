@@ -583,12 +583,12 @@ export class AgreementService {
       action: AuditAction.CHECKED_OUT,
 
       userId: actorObjId,
-      userRole: lawyerRole,
+             userRole: lawyerRole,
       notes: 'Lock manually released without uploading changes',
     });
 
     return { success: true };
-  }
+    }
 
   async findAllVersions(caseId: string) {
     const versions = await this.documentVersion

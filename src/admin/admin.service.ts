@@ -171,17 +171,31 @@ export class AdminService {
   }
 
   async getCasesByStage(status: string, page = 1, limit = 20) {
-    const normalized = (status || '').toUpperCase() as CaseWorkflowStatus;
+    const normalized = (status || '').toUpperCase();
     const validStatuses = Object.values(CaseWorkflowStatus) as string[];
 
-    if (!validStatuses.includes(normalized)) {
+    // Filter options that are not a workflowStatus of their own.
+    const derivedFilters: Record<string, any> = {
+      RETURNED_TO_DRAFT: {
+        workflowStatus: CaseWorkflowStatus.DRAFT,
+        cmReturnReason: { $nin: [null, ''] },
+      },
+      EXECUTION_PACK_GENERATED: { executionPackGenerated: true },
+    };
+
+    let query: any;
+    if (derivedFilters[normalized]) {
+      query = derivedFilters[normalized];
+    } else if (validStatuses.includes(normalized)) {
+      query = { workflowStatus: normalized };
+    } else {
       throw new BadRequestException(`Invalid status: ${status}`);
     }
 
     const skip = (page - 1) * limit;
     const [docs, total] = await Promise.all([
       this.caseModel
-        .find({ workflowStatus: normalized })
+        .find(query)
         .populate('owner', 'firstName lastName email')
         .populate('invitedUser', 'firstName lastName email')
         .populate('assignedCaseManager', 'firstName lastName email')
@@ -190,7 +204,7 @@ export class AdminService {
         .limit(limit)
         .lean()
         .exec(),
-      this.caseModel.countDocuments({ workflowStatus: normalized }),
+      this.caseModel.countDocuments(query),
     ]);
 
     return { total, page, limit, status: normalized, docs };
