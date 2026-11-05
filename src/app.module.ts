@@ -14,6 +14,10 @@ import { AuditLogModule } from './common/audit-log/audit-log.module';
 import { CompaniesModule } from './cases/companies/companies.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { SeedModule } from './seed/seed.module';
+import { TrackingModule } from './tracking/tracking.module';
+import { PaymentsModule } from './payments/payments.module';
+import { GdprModule } from './gdpr/gdpr.module';
+import { ReportsModule } from './reports/reports.module';
 
 
 import { AppController } from './app.controller';
@@ -24,6 +28,8 @@ import { AppService } from './app.service';
     ConfigModule.forRoot({ isGlobal: true }),
     MongooseModule.forRoot(Config.mongoURI),
     EventEmitterModule.forRoot(),
+    TrackingModule,
+    PaymentsModule,
     UsersModule,
     AuthModule,
     CasesModule,
@@ -34,7 +40,9 @@ import { AppService } from './app.service';
     CompaniesModule,
     LawyerModule,
     AuditLogModule,
-    SeedModule
+    SeedModule,
+    GdprModule,
+    ReportsModule,
 
 
   ],
