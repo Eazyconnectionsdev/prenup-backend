@@ -12,6 +12,12 @@ import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { AUDIT_EVENT } from '../common/audit-log/events/audit.event';
+import {
+  AuditAction,
+  AuditModule as AuditModuleName,
+} from '../common/audit-log/enum/audit-action.enum';
 import {
   Case,
   CaseDocument,
@@ -48,6 +54,17 @@ import { canViewCase } from './case-access.util';
 const CANNOT_INVITE_MESSAGE =
   "This email address can't be invited to your case. Please check the address or contact support.";
 
+// The free-text actions the older case_audit_logs helper was called with, and
+// the audit action each one stands for.
+const LEGACY_AUDIT_ACTIONS: Record<string, AuditAction> = {
+  CASE_SET_ASIDE: AuditAction.ARCHIVED,
+  PARTNER_LINKED: AuditAction.INVITE_ACCEPTED,
+  PARTNER_LINK_CONFLICT: AuditAction.OTHER,
+  PARTNER_REMOVED: AuditAction.UPDATED,
+  PARTNER_ACCOUNT_DELETED: AuditAction.DELETED,
+  CASE_RETURNED_TO_DRAFT: AuditAction.DRAFT_RETURNED,
+};
+
 @Injectable()
 export class CasesService {
   private DUMMY_AGREEMENT_DRIVE_LINK = 'https://drive.google.com/file/d/FAKE_GOOGLE_DRIVE_ID/view';
@@ -61,7 +78,40 @@ export class CasesService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(CaseAuditLog.name) private auditLogModel: Model<CaseAuditLogDocument>,
     private partnerInvites: PartnerInviteService,
+    private readonly eventEmitter: EventEmitter2,
   ) { }
+
+  /**
+   * One line in the case's audit trail (the audit_logs collection, read by
+   * the Audit tab). Emitted as an event, so a failure to write it can never
+   * fail the action that was audited.
+   */
+  private recordAudit(entry: {
+    caseId: Types.ObjectId | string;
+    userId: Types.ObjectId | string;
+    action: AuditAction;
+    module?: string;
+    entityType?: string;
+    entityId?: Types.ObjectId | string;
+    userRole?: string;
+    stage?: string;
+    notes?: string;
+    changedFields?: Record<string, { old: any; new: any }>;
+  }) {
+    if (!entry.caseId || !entry.userId) return;
+    this.eventEmitter.emit(AUDIT_EVENT, {
+      module: entry.module ?? AuditModuleName.CASE,
+      entityType: entry.entityType ?? 'Case',
+      entityId: entry.entityId ?? entry.caseId,
+      caseId: entry.caseId,
+      action: entry.action,
+      userId: entry.userId,
+      userRole: entry.userRole,
+      stage: entry.stage,
+      notes: entry.notes,
+      changedFields: entry.changedFields,
+    });
+  }
   private isPrivilegedRole(role?: string): boolean {
     return role === 'superadmin' || role === 'admin' || role === 'case_manager';
   }
@@ -323,7 +373,17 @@ export class CasesService {
     }
 
     try {
-      return await this.create(userId, title, id);
+      const created = await this.create(userId, title, id);
+      this.recordAudit({
+        caseId: created._id,
+        userId,
+        action: AuditAction.CREATED,
+        stage: 'Case created',
+        notes: created.caseNumber
+          ? `Case ${created.caseNumber} created`
+          : 'Case created',
+      });
+      return created;
     } catch (err) {
       await this.userModel.updateOne(
         { _id: user._id, inviteCaseId: id },
@@ -445,6 +505,20 @@ export class CasesService {
     notes?: string,
     extra?: { oldValue?: any; newValue?: any },
   ) {
+    // The partner-linking actions have always written here; mirror them into
+    // the audit trail the Audit tab reads so nothing is missing from it.
+    this.recordAudit({
+      caseId,
+      userId,
+      action: LEGACY_AUDIT_ACTIONS[action] ?? AuditAction.OTHER,
+      stage: action,
+      notes,
+      changedFields:
+        extra && (extra.oldValue !== undefined || extra.newValue !== undefined)
+          ? { value: { old: extra.oldValue, new: extra.newValue } }
+          : undefined,
+    });
+
     try {
       await this.auditLogModel.create({
         caseId: new Types.ObjectId(String(caseId)),
@@ -795,12 +869,25 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       throw new NotFoundException('Case not found');
     }
 
+    const previousStatus = c.paymentStatus;
     c.paymentCompleted = true;
     c.paymentStatus = PaymentStatus.COMPLETED;
 
     c.workflowStatus = CaseWorkflowStatus.DRAFT;
 
     await c.save();
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.PAYMENT_SUCCEEDED,
+      module: AuditModuleName.PAYMENT,
+      stage: 'Registration and payment',
+      notes: 'Payment confirmed',
+      changedFields: {
+        paymentStatus: { old: previousStatus ?? null, new: PaymentStatus.COMPLETED },
+      },
+    });
 
     return c;
   }
@@ -872,6 +959,15 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       throw new BadRequestException('This case already has a partner');
     }
 
+    this.recordAudit({
+      caseId: saved._id,
+      userId,
+      action: AuditAction.INVITE_ACCEPTED,
+      module: AuditModuleName.INVITATION,
+      stage: 'Partner joined',
+      notes: 'Invitation accepted; partner linked to the case',
+    });
+
     await this.notifyPartnerJoined(caseId);
     return saved;
   }
@@ -935,6 +1031,18 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       residesInUK: dto.residesInUK,
     } as any;
     await c.save();
+
+    this.recordAudit({
+      caseId: c._id,
+      userId,
+      action: AuditAction.FORM_SUBMITTED,
+      module: AuditModuleName.FORM,
+      stage: 'Onboarding',
+      notes: `Service selected: ${dto.agreementType}`,
+      changedFields: {
+        agreementType: { old: prev ? null : null, new: dto.agreementType },
+      },
+    });
 
     return {
       completed: true,
@@ -1088,6 +1196,15 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       : `${baseUrl}/register-partner?${params.toString()}`;
     await this.mailService.sendInvite(dto.email, inviteUrl, {
       existingAccount: !!existingAccount,
+    });
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: inviterId,
+      action: AuditAction.INVITED,
+      module: AuditModuleName.INVITATION,
+      stage: 'Partner invited',
+      notes: `Invitation sent to ${dto.email}`,
     });
 
     return {
@@ -1296,6 +1413,17 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     }
 
     await c.save();
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.FORM_UPDATED,
+      module: AuditModuleName.FORM,
+      stage: stepName,
+      notes: `${config.section} / ${config.field} saved`,
+      userRole: isPrivileged && !isOwner && !isInvited ? 'staff' : undefined,
+    });
+
     return c;
   }
 
@@ -1473,6 +1601,15 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       console.error('Failed to send handshake review emails', err);
     }
 
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.SUBMITTED_FOR_REVIEW,
+      stage: 'Partner review',
+      userRole: isOwner ? 'PRIMARY' : 'SECONDARY',
+      notes: trimmedMessage ? `${actionLabel} — ${trimmedMessage}` : actionLabel,
+    });
+
     return c;
   }
 
@@ -1501,6 +1638,8 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
   }
 
   let movedToCaseManager = false;
+  // The branch-specific approval label, kept for the audit trail too.
+  let approveLabel = '';
   const approval = this.ensureApprovalObj(c);
   const now = new Date();
 
@@ -1520,6 +1659,7 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     const p1ApproveAction = p1HadChanges
       ? 'Primary Applicant — Approved Updated Version'
       : 'Primary Applicant — Approved without changes';
+    approveLabel = p1ApproveAction;
 
     approval.reviewTimeline.push({
       action: p1ApproveAction,
@@ -1545,6 +1685,7 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     const approveAction = hadChanges
       ? 'Secondary Applicant — Approved Updated Version'
       : 'Secondary Applicant — Approved without changes';
+    approveLabel = approveAction;
 
     approval.reviewTimeline.push({
       action: approveAction,
@@ -1610,6 +1751,33 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     } catch (err) {
       console.error(`Failed to notify case managers and applicants for case ${c._id}`, err);
     }
+  }
+
+  this.recordAudit({
+    caseId: c._id,
+    userId: actorId,
+    action: AuditAction.APPROVED,
+    stage: 'Partner review',
+    userRole: isOwner ? 'PRIMARY' : 'SECONDARY',
+    notes: approveLabel,
+  });
+
+  // The handshake closing is a stage of its own: the couple's sections lock
+  // and the case passes to a case manager.
+  if (movedToCaseManager) {
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.STATUS_CHANGED,
+      stage: 'Mutual approval',
+      notes: 'Both partners confirmed; case sent to a case manager',
+      changedFields: {
+        workflowStatus: {
+          old: CaseWorkflowStatus.DRAFT,
+          new: CaseWorkflowStatus.COUPLE_SUBMITTED,
+        },
+      },
+    });
   }
 
   return c;
@@ -1707,6 +1875,15 @@ async rejectCaseByUser(
     console.error('Failed to send partner changes requested email', err);
   }
 
+  this.recordAudit({
+    caseId: c._id,
+    userId: actorId,
+    action: AuditAction.CHANGES_REQUESTED,
+    stage: 'Partner review',
+    userRole: isOwner ? 'PRIMARY' : 'SECONDARY',
+    notes: reason ? `${action} — ${reason}` : action,
+  });
+
   return c;
 }
 
@@ -1756,6 +1933,15 @@ async rejectCaseByUser(
     }
 
     await c.save();
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.STATUS_CHANGED,
+      stage: 'Case unlocked',
+      notes: 'Every section unlocked for editing',
+      changedFields: { fullyLocked: { old: true, new: false } },
+    });
 
     return c;
   }
@@ -2007,6 +2193,16 @@ ${taskLines.join('\n\n')}`;
       }
     }
 
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.FORM_SUBMITTED,
+      module: AuditModuleName.FORM,
+      stage: 'Pre-lawyer questionnaire',
+      userRole: isOwner ? 'PRIMARY' : 'SECONDARY',
+      notes: `${isOwner ? 'Primary' : 'Secondary'} applicant submitted their pre-lawyer questionnaire`,
+    });
+
     return c;
   }
 
@@ -2058,11 +2254,29 @@ ${taskLines.join('\n\n')}`;
       throw new ForbiddenException('Your solicitor choice has been locked');
     }
 
+    const previousLawyer = entry.selectedLawyer
+      ? entry.selectedLawyer.toString()
+      : null;
+
     entry.selectedLawyer = new Types.ObjectId(lawyerId);
     entry.selectedAt = new Date();
     c.markModified(slot);
 
     await c.save();
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.LAWYER_SELECTED,
+      stage: 'Lawyer selection',
+      entityType: 'Lawyer',
+      entityId: lawyerId,
+      userRole: slot === 'preQuestionnaireUser1' ? 'PRIMARY' : 'SECONDARY',
+      notes: `Chose ${(lawyer as any).name ?? 'a solicitor'}`,
+      changedFields: {
+        selectedLawyer: { old: previousLawyer, new: lawyerId },
+      },
+    });
 
     return (await this.findById(caseId, true)) ?? c;
   }
@@ -2583,6 +2797,20 @@ ${taskLines.join('\n\n')}`;
 
       await this.notifyUsersToCompletePreLawyer(c);
     }
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.APPROVED,
+      module: AuditModuleName.CASE_MANAGER,
+      stage: 'Case manager approval',
+      userRole: 'case_manager',
+      notes: 'Case approved by the case manager',
+      changedFields: {
+        'approval.caseManagerApproved': { old: false, new: true },
+      },
+    });
+
     return c;
   }
   
@@ -2620,9 +2848,25 @@ ${taskLines.join('\n\n')}`;
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
 
+    const previousManager = (c as any).assignedCaseManager
+      ? String((c as any).assignedCaseManager)
+      : null;
+
     if (!managerId || managerId === 'unassign') {
       (c as any).assignedCaseManager = null;
       await c.save();
+      this.recordAudit({
+        caseId: c._id,
+        userId: actorId,
+        action: AuditAction.UPDATED,
+        module: AuditModuleName.CASE_MANAGER,
+        stage: 'Case manager assignment',
+        userRole: actorRole,
+        notes: 'Case manager unassigned',
+        changedFields: {
+          assignedCaseManager: { old: previousManager, new: null },
+        },
+      });
       return c;
     }
 
@@ -2635,6 +2879,20 @@ ${taskLines.join('\n\n')}`;
       c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
     }
     await c.save();
+
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.UPDATED,
+      module: AuditModuleName.CASE_MANAGER,
+      stage: 'Case manager assignment',
+      userRole: actorRole,
+      notes: 'Case manager assigned',
+      changedFields: {
+        assignedCaseManager: { old: previousManager, new: managerId },
+      },
+    });
+
     const populated = await this.caseModel
       .findById(c._id)
       .populate('assignedCaseManager owner invitedUser')
@@ -2697,6 +2955,20 @@ Lets Prenup
     const normalized = (status || '').toUpperCase();
     if (!['CM', 'PAID', 'LAWYER'].includes(normalized))
       throw new BadRequestException('Invalid status');
+
+    // Each branch below saves and returns on its own, so the move is recorded
+    // here, once, as soon as it is known to be a valid one.
+    this.recordAudit({
+      caseId: c._id,
+      userId: actorId,
+      action: AuditAction.STATUS_CHANGED,
+      module: AuditModuleName.CASE_MANAGER,
+      stage: 'Workflow status',
+      notes: `Case moved to ${normalized}`,
+      changedFields: {
+        workflowStatus: { old: c.workflowStatus ?? null, new: normalized },
+      },
+    });
     if (normalized === 'CM') {
       c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
       if (!c.assignedCaseManager)

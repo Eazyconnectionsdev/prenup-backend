@@ -7,7 +7,14 @@ import {
 } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Model, Types } from 'mongoose';
+import { AUDIT_EVENT } from '../../common/audit-log/events/audit.event';
+import { AuditLogService } from '../../common/audit-log/audit-log.service';
+import {
+  AuditAction,
+  AuditModule as AuditModuleName,
+} from '../../common/audit-log/enum/audit-action.enum';
 
 import { Case, CaseWorkflowStatus } from '../schemas/case.schema';
 import { Lawyer } from '../schemas/lawyer.schema';
@@ -48,6 +55,15 @@ import {
 
 import { MailService } from '../../mail/mail.service';
 import { AgreementService } from '../../agreement/agreement.service';
+// The free-text actions the older case_audit_logs helper is called with, and
+// the audit action each one stands for.
+const CM_LEGACY_AUDIT_ACTIONS: Record<string, AuditAction> = {
+  RETURN_TO_DRAFT: AuditAction.DRAFT_RETURNED,
+  NOTE_DELETED: AuditAction.DELETED,
+  DOCUMENT_DELETED: AuditAction.DELETED,
+  CASE_ARCHIVED: AuditAction.CASE_ARCHIVED,
+};
+
 @Injectable()
 export class CaseManagerService {
   constructor(
@@ -82,8 +98,39 @@ export class CaseManagerService {
     @InjectModel(Lawyer.name)
     private readonly lawyerModel: Model<Lawyer>,
 
-
+    private readonly eventEmitter: EventEmitter2,
+    private readonly auditLogService: AuditLogService,
   ) { }
+
+  /**
+   * One line in the case's audit trail (the audit_logs collection behind the
+   * Audit tab). Emitted, so a failed write can never fail the action.
+   */
+  private recordAudit(entry: {
+    caseId: Types.ObjectId | string;
+    userId: Types.ObjectId | string;
+    action: AuditAction;
+    module?: string;
+    entityType?: string;
+    entityId?: Types.ObjectId | string;
+    stage?: string;
+    notes?: string;
+    changedFields?: Record<string, { old: any; new: any }>;
+  }) {
+    if (!entry.caseId || !entry.userId) return;
+    this.eventEmitter.emit(AUDIT_EVENT, {
+      module: entry.module ?? AuditModuleName.CASE_MANAGER,
+      entityType: entry.entityType ?? 'Case',
+      entityId: entry.entityId ?? entry.caseId,
+      caseId: entry.caseId,
+      action: entry.action,
+      userId: entry.userId,
+      userRole: 'case_manager',
+      stage: entry.stage,
+      notes: entry.notes,
+      changedFields: entry.changedFields,
+    });
+  }
 
   // ====================================================
   // DASHBOARD
@@ -477,10 +524,49 @@ export class CaseManagerService {
       );
     }
 
+    const now = new Date();
+    const actorId = Types.ObjectId.isValid(userId)
+      ? new Types.ObjectId(userId)
+      : null;
+
     caseDoc.workflowStatus =
       CaseWorkflowStatus.CM_APPROVED;
 
+    // Record the approval itself, not just the stage. returnToDraft clears
+    // these three, so approve is what has to set them -- and the couple's
+    // dashboard and sidebar open their independent-legal-advice steps off
+    // approval.caseManagerApproved.
+    caseDoc.cmApproved = true;
+    caseDoc.cmApprovedAt = now;
+    caseDoc.cmApprovedBy = actorId;
+    caseDoc.cmReturnReason = null;
+
+    const approval: any =
+      (caseDoc as any).approval ?? {};
+    approval.caseManagerApproved = true;
+    approval.caseManagerApprovedAt = now;
+    approval.approvedBy = actorId;
+    (caseDoc as any).approval = approval;
+    caseDoc.markModified('approval');
+
     await caseDoc.save();
+
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.APPROVED,
+      stage: 'Case manager approval',
+      notes: dto?.comments
+        ? `Case approved — ${dto.comments}`
+        : 'Case approved by the case manager',
+      changedFields: {
+        workflowStatus: {
+          old: CaseWorkflowStatus.COUPLE_SUBMITTED,
+          new: CaseWorkflowStatus.CM_APPROVED,
+        },
+        'approval.caseManagerApproved': { old: false, new: true },
+      },
+    });
 
     await this.createTimelineEntry(
       caseId,
@@ -507,6 +593,14 @@ export class CaseManagerService {
     caseId: string,
     userId: string,
   ) {
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.COUPLE_APPROVAL_REQUESTED,
+      stage: 'Couple confirmation',
+      notes: 'Both partners asked to confirm',
+    });
+
     await this.createTimelineEntry(
       caseId,
       userId,
@@ -539,6 +633,15 @@ export class CaseManagerService {
       new Date();
 
     await c.save();
+
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.UPLOAD_CONFIRMED,
+      stage: 'Couple confirmation',
+      notes: "Primary applicant's confirmation uploaded",
+      changedFields: { p1Confirmed: { old: false, new: true } },
+    });
 
     return c;
   }
@@ -574,6 +677,15 @@ export class CaseManagerService {
     }
 
     await c.save();
+
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.UPLOAD_CONFIRMED,
+      stage: 'Couple confirmation',
+      notes: "Secondary applicant's confirmation uploaded",
+      changedFields: { p2Confirmed: { old: false, new: true } },
+    });
 
     return c;
   }
@@ -716,6 +828,18 @@ export class CaseManagerService {
       userId,
     );
 
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.LAWYERS_ASSIGNED,
+      stage: 'Lawyers assigned',
+      notes: `P1: ${(p1Lawyer as any)?.name ?? dto.p1LawyerId}; P2: ${(p2Lawyer as any)?.name ?? dto.p2LawyerId}`,
+      changedFields: {
+        assignedLawyerP1: { old: null, new: dto.p1LawyerId },
+        assignedLawyerP2: { old: null, new: dto.p2LawyerId },
+      },
+    });
+
     await this.createTimelineEntry(
       caseId,
       userId,
@@ -744,6 +868,16 @@ export class CaseManagerService {
         note: dto.note,
         createdBy: new Types.ObjectId(userId),
       });
+
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.NOTE_CREATED,
+      entityType: 'CaseManagerNote',
+      entityId: note._id as any,
+      stage: 'Case manager notes',
+      notes: dto.category ? `${dto.category} note added` : 'Note added',
+    });
 
     await this.createTimelineEntry(
       caseId,
@@ -809,6 +943,14 @@ export class CaseManagerService {
     action: string,
     notes?: string,
   ) {
+    this.recordAudit({
+      caseId,
+      userId,
+      action: CM_LEGACY_AUDIT_ACTIONS[action] ?? AuditAction.OTHER,
+      stage: action,
+      notes,
+    });
+
     return this.auditLogModel.create({
       caseId: new Types.ObjectId(caseId),
       userId: new Types.ObjectId(userId),
@@ -852,6 +994,17 @@ export class CaseManagerService {
         uploadedBy:
           new Types.ObjectId(userId),
       });
+
+    this.recordAudit({
+      caseId,
+      userId,
+      action: AuditAction.DOCUMENT_UPLOADED,
+      module: AuditModuleName.S3,
+      entityType: 'CaseDocument',
+      entityId: (document as any)._id,
+      stage: 'Case documents',
+      notes: originalName,
+    });
 
     await this.createTimelineEntry(
       caseId,
@@ -1107,18 +1260,13 @@ export class CaseManagerService {
       });
   }
 
+  // The case's audit trail, from the audit-log module. The older
+  // case_audit_logs rows are mirrored into it, so this is the whole story.
   async auditLog(
     caseId: string,
+    options?: { limit?: number; skip?: number },
   ) {
-    return this.auditLogModel
-      .find({
-        caseId:
-          new Types.ObjectId(caseId),
-      })
-      .populate('userId')
-      .sort({
-        createdAt: -1,
-      });
+    return this.auditLogService.getCaseTimeline(caseId, options);
   }
 
 

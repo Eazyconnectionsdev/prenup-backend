@@ -63,7 +63,7 @@ export class AuditLogService {
       .sort({ createdAt: -1 })
       .skip(options?.skip ?? 0)
       .limit(options?.limit ?? 100)
-      .populate('userId', 'name email')
+      .populate('userId', 'firstName lastName email role')
   }
 
 
@@ -76,7 +76,7 @@ export class AuditLogService {
       .find({ entityType, entityId: new Types.ObjectId(entityId) })
 
       .sort({ createdAt: -1 })
-      .populate('userId', 'name email')
+      .populate('userId', 'firstName lastName email role')
 
   }
 
