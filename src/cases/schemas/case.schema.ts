@@ -173,6 +173,17 @@ export class PreQuestionnaire {
   })
   answers!: string[];
 
+  /**
+   * The pre-lawyer questionnaire form, keyed by field name. `answers` above
+   * predates it and only ever held a flat list, so the structured form lives
+   * here and the two are kept side by side.
+   */
+  @Prop({
+    type: Object,
+    default: {},
+  })
+  responses?: Record<string, any>;
+
   @Prop({
     type: Types.ObjectId,
     ref: 'Lawyer',

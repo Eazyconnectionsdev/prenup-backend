@@ -43,6 +43,7 @@ export enum AuditAction {
   VERSION_COMMENTED = 'VERSION_COMMENTED',
   TIMELINE_ENTRY_CREATED = 'TIMELINE_ENTRY_CREATED',
 
+  LAWYER_SELECTED = 'LAWYER_SELECTED',
   ILA_COMPLETED = 'ILA_COMPLETED',
   SIGNED = 'SIGNED',
   ARCHIVED = 'ARCHIVED',
@@ -58,6 +59,7 @@ export enum AuditAction {
 
 export enum AuditModule {
   AUTH = 'Auth',
+  CASE = 'Case',
   INVITATION = 'Invitation',
   PAYMENT = 'Payment',
   FORM = 'Form',

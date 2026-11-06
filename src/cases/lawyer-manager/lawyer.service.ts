@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 
 import { InjectModel } from '@nestjs/mongoose';
+import { AuditLogService } from '../../common/audit-log/audit-log.service';
 import mongoose from 'mongoose';
 
 
@@ -162,6 +163,8 @@ export class LawyerService {
     // ===================================================
     // AUDIT LOG
     // ===================================================
+
+    private readonly auditLogService: AuditLogService,
 
     @InjectModel(CaseAuditLog.name)
     private readonly auditLogModel:
@@ -2211,22 +2214,13 @@ export class LawyerService {
   // AUDIT LOG
   // =====================================================
 
+  // The case's audit trail, from the audit-log module (see
+  // CaseManagerService.auditLog).
   async auditLog(
     caseId: string,
+    options?: { limit?: number; skip?: number },
   ) {
-    return this.auditLogModel
-      .find({
-        caseId:
-          new Types.ObjectId(
-            caseId,
-          ),
-      })
-      .populate(
-        'userId',
-      )
-      .sort({
-        createdAt: -1,
-      });
+    return this.auditLogService.getCaseTimeline(caseId, options);
   }
 
   // =====================================================
