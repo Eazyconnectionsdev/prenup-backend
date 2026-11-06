@@ -916,55 +916,6 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     return q.exec();
   }
   async findAll(actor?: { id?: string; role?: string }): Promise<CaseDocument[]> {
-    if (actor?.role === 'case_manager') {
-      // Safe query: use $and to avoid $or key collision
-      const findAllEligibilityOrClauses = [
-        { 'approval.user1Approved': true, 'approval.user2Approved': true },
-        { 'approval.mutualApprovalAndSnapshot': MutualApprovalStatus.COMPLETED },
-        {
-          workflowStatus: {
-            $in: [
-              CaseWorkflowStatus.COUPLE_SUBMITTED,
-              CaseWorkflowStatus.CM_APPROVED,
-              CaseWorkflowStatus.PRE_LAWYER_PENDING,
-              CaseWorkflowStatus.PRE_LAWYER_COMPLETED,
-              CaseWorkflowStatus.LAWYERS_ASSIGNED,
-              CaseWorkflowStatus.LAWYER_CLIENT_CONFIRMATION,
-              CaseWorkflowStatus.LAWYER_REVIEW,
-              CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED,
-              CaseWorkflowStatus.LAWYER_ILA_PENDING,
-              CaseWorkflowStatus.LAWYER_SIGNOFF_COMPLETE,
-              CaseWorkflowStatus.COMPLETED,
-              CaseWorkflowStatus.ARCHIVED,
-            ],
-          },
-        },
-      ];
-
-      const managerId = actor.id && Types.ObjectId.isValid(actor.id) ? new Types.ObjectId(actor.id) : actor.id;
-      const findAllQuery: any = { partnerInvited: true };
-
-      if (managerId) {
-        findAllQuery.$and = [
-          { $or: findAllEligibilityOrClauses },
-          {
-            $or: [
-              { assignedCaseManager: null },
-              { assignedCaseManager: { $exists: false } },
-              { assignedCaseManager: managerId },
-            ],
-          },
-        ];
-      } else {
-        findAllQuery.$or = findAllEligibilityOrClauses;
-      }
-
-      return this.caseModel
-        .find(findAllQuery)
-        .populate('owner invitedUser assignedCaseManager')
-        .sort({ createdAt: -1 })
-        .exec();
-    }
     return this.caseModel.find().exec();
   }
   async findByUser(userId: string | Types.ObjectId): Promise<CaseDocument[]> {
