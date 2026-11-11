@@ -250,6 +250,71 @@ export enum PaymentStatus {
   REFUNDED = 'REFUNDED',
 }
 
+// The record of what was paid for the case. Written by the payment screen and
+// then left alone, so the case always says which service was paid for and how
+// much, not merely that a payment happened.
+//
+// Card data is deliberately NOT kept here: the payment screen sends a card
+// number and CVC, the service keeps only the last four digits and the brand,
+// and discards the rest. Nothing in this document could be used to charge a
+// card again.
+@Schema({ _id: false })
+export class CasePayment {
+  @Prop({ type: String, default: 'dummy' })
+  provider!: string;
+
+  // Our own reference, shown back to the client as the receipt number.
+  @Prop({ type: String, default: null })
+  reference?: string | null;
+
+  @Prop({
+    type: String,
+    enum: Object.values(PaymentStatus),
+    default: PaymentStatus.PENDING,
+  })
+  status!: PaymentStatus;
+
+  // The service this payment bought, as an AGREEMENT_TYPES id. Kept beside the
+  // case's own agreementType so that if the service is ever changed, what was
+  // actually paid for is still on record.
+  @Prop({ type: String, enum: AGREEMENT_TYPES, default: null })
+  agreementType?: string | null;
+
+  // Whole currency units (pounds), to two decimal places. The price is a
+  // server-side constant and is never taken from the request.
+  @Prop({ type: Number, default: 0 })
+  amount!: number;
+
+  @Prop({ type: String, default: 'GBP' })
+  currency!: string;
+
+  @Prop({ type: String, default: null })
+  email?: string | null;
+
+  @Prop({ type: String, default: null })
+  nameOnCard?: string | null;
+
+  @Prop({ type: String, default: null })
+  cardBrand?: string | null;
+
+  @Prop({ type: String, default: null })
+  cardLast4?: string | null;
+
+  @Prop({ type: String, default: null })
+  country?: string | null;
+
+  @Prop({ type: String, default: null })
+  postalCode?: string | null;
+
+  @Prop({ type: Date, default: null })
+  paidAt?: Date | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  paidBy?: Types.ObjectId | null;
+}
+
+export const CasePaymentSchema = SchemaFactory.createForClass(CasePayment);
+
 export enum PartnerReviewStatus {
   IN_PROGRESS = 'IN_PROGRESS',
   FINAL_SUBMIT = 'FINAL_SUBMIT',
@@ -726,6 +791,14 @@ export class Case {
     default: PaymentStatus.PENDING,
   })
   paymentStatus!: PaymentStatus;
+
+  // What was paid, and for which service. paymentStatus above stays the one
+  // flag the workflow reads; this holds the detail behind it.
+  @Prop({
+    type: CasePaymentSchema,
+    default: null,
+  })
+  payment?: CasePayment | null;
 
   // Chosen during onboarding (user 1 only).
   @Prop({

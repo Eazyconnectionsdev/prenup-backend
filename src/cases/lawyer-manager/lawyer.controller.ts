@@ -273,6 +273,24 @@ export class LawyerController {
     );
   }
 
+  /**
+   * The caller's assigned cases in one workflow stage — what the portal's
+   * dashboard cards drill down into (`/lawyer/assigned-cases?status=...`).
+   * Declared before the `:caseId` routes so the path is not read as a case id.
+   */
+  @Get('dashboard/stages/:status/cases')
+  async stageCases(
+    @Req() req,
+    @Param('status') status: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.myCases(
+      user.id,
+      { status },
+    );
+  }
+
   // =====================================================
   // COMPLETED
   // =====================================================
@@ -289,17 +307,27 @@ export class LawyerController {
   }
 
   // =====================================================
-  // MY CASES (active)
+  // MY CASES (every case assigned to the caller)
   // =====================================================
 
+  /**
+   * Every case the signed-in lawyer is assigned to.
+   *
+   * Defaults to all of them, because the dashboard derives its own stage
+   * counts from this response. `?scope=active|completed|all` or
+   * `?status=LAWYER_REVIEW,LAWYER_ILA_PENDING` narrows it server-side.
+   */
   @Get('cases')
   async myCases(
     @Req() req,
+    @Query('scope') scope?: string,
+    @Query('status') status?: string | string[],
   ) {
     const user = this.ensureUser(req);
 
     return this.lawyerService.myCases(
       user.id,
+      { scope, status },
     );
   }
 

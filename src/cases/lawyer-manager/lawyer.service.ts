@@ -213,6 +213,139 @@ export class LawyerService {
     return `Lawyer@${random}#`;
   }
 
+  // =====================================================
+  // LAWYER IDENTITY
+  // =====================================================
+
+  /**
+   * Every id that can appear in a case's `assignedLawyerP1`/`assignedLawyerP2`
+   * for this signed-in lawyer.
+   *
+   * A case points at the Lawyer *profile* (see case.schema: ref 'Lawyer'), but
+   * the caller only ever gives us their *login* (User) id, and the link between
+   * the two may be recorded on either side (`User.lawyerProfile`,
+   * `Lawyer.user`, legacy `Lawyer.userId`). Older data may also hold the login
+   * id directly. So collect all of them and match with `$in` — matching the
+   * login id alone returns nothing, which is why the lawyer portal showed an
+   * empty case list.
+   *
+   * Mirrors `isAssignedLawyer` in ../case-access.util, which the per-case guard
+   * uses, so the list and the guard agree on what "assigned to me" means.
+   */
+  private async resolveLawyerIds(
+    userId: string,
+  ): Promise<Types.ObjectId[]> {
+    if (
+      !userId ||
+      !mongoose.isValidObjectId(userId)
+    ) {
+      throw new BadRequestException(
+        `Invalid user ID: "${userId}"`,
+      );
+    }
+
+    const uid =
+      new Types.ObjectId(
+        String(userId),
+      );
+
+    const ids = new Map<
+      string,
+      Types.ObjectId
+    >([[String(uid), uid]]);
+
+    const add = (value: any) => {
+      if (
+        !value ||
+        !mongoose.isValidObjectId(value)
+      ) {
+        return;
+      }
+
+      const key = String(value);
+
+      if (!ids.has(key)) {
+        ids.set(
+          key,
+          new Types.ObjectId(key),
+        );
+      }
+    };
+
+    const [user, profiles] =
+      await Promise.all([
+        this.userModel
+          .findById(uid)
+          .select('lawyerProfile')
+          .lean()
+          .exec(),
+
+        this.lawyerModel
+          .find({
+            $or: [
+              { user: uid },
+              { userId: uid },
+            ],
+          })
+          .select('_id')
+          .lean()
+          .exec(),
+      ]);
+
+    add((user as any)?.lawyerProfile);
+
+    (profiles as any[]).forEach(
+      (p) => add(p?._id),
+    );
+
+    return [...ids.values()];
+  }
+
+  /**
+   * Mongo filter for "cases this lawyer is assigned to", as P1's or P2's
+   * lawyer. Use it on every lawyer-portal list and count so a lawyer never
+   * sees — or is counted on — a case they have no part in.
+   */
+  private async assignedCaseFilter(
+    userId: string,
+  ): Promise<Record<string, any>> {
+    const ids =
+      await this.resolveLawyerIds(
+        userId,
+      );
+
+    return {
+      $or: [
+        {
+          assignedLawyerP1: {
+            $in: ids,
+          },
+        },
+
+        {
+          assignedLawyerP2: {
+            $in: ids,
+          },
+        },
+      ],
+    };
+  }
+
+  /**
+   * Counts a lawyer's own cases: their assignment, plus whatever else the
+   * caller is asking about, without the two `$or`s overwriting each other.
+   */
+  private async countMine(
+    assigned: Record<string, any>,
+    criteria: Record<string, any>,
+  ): Promise<number> {
+    return this.caseModel
+      .countDocuments({
+        $and: [assigned, criteria],
+      })
+      .exec();
+  }
+
   private generateChangeSet(
     previous: any,
     current: any,
@@ -985,6 +1118,13 @@ export class LawyerService {
   async dashboard(
     userId: string,
   ) {
+    // Every count below is restricted to the cases this lawyer is assigned to,
+    // so the portal reports the caller's own workload and not the whole firm's.
+    const assigned =
+      await this.assignedCaseFilter(
+        userId,
+      );
+
     const [
       totalCases,
 
@@ -1011,177 +1151,156 @@ export class LawyerService {
       // TOTAL
 
       this.caseModel
-        .countDocuments(),
+        .countDocuments(assigned)
+        .exec(),
 
       // PARTNER
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.DRAFT,
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.DRAFT,
 
-          partnerInvited:
-            false,
-        }),
+        partnerInvited: false,
+      }),
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.DRAFT,
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.DRAFT,
 
-          partnerInvited:
-            true,
-        }),
+        partnerInvited: true,
+      }),
 
       // CM REVIEW
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.DRAFT,
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.DRAFT,
 
-          cmReturnReason: {
-            $exists: true,
-            $ne: null,
-          },
-        }),
+        cmReturnReason: {
+          $exists: true,
+          $ne: null,
+        },
+      }),
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.COUPLE_SUBMITTED,
-        }),
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.COUPLE_SUBMITTED,
+      }),
 
       // PRE LAWYER
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.PRE_LAWYER_PENDING,
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.PRE_LAWYER_PENDING,
 
-          $or: [
-            {
-              preQuestionnaireUser1: {
-                $exists: false,
-              },
+        $or: [
+          {
+            preQuestionnaireUser1: {
+              $exists: false,
             },
+          },
 
-            {
-              'preQuestionnaireUser1.submitted':
-                false,
+          {
+            'preQuestionnaireUser1.submitted':
+              false,
+          },
+        ],
+      }),
+
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.PRE_LAWYER_PENDING,
+
+        $or: [
+          {
+            preQuestionnaireUser2: {
+              $exists: false,
             },
-          ],
-        }),
+          },
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.PRE_LAWYER_PENDING,
-
-          $or: [
-            {
-              preQuestionnaireUser2: {
-                $exists: false,
-              },
-            },
-
-            {
-              'preQuestionnaireUser2.submitted':
-                false,
-            },
-          ],
-        }),
+          {
+            'preQuestionnaireUser2.submitted':
+              false,
+          },
+        ],
+      }),
 
       // CLIENT CONFIRMATION
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.LAWYER_REVIEW,
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_REVIEW,
 
-          $or: [
-            {
-              p1Confirmed: false,
+        $or: [
+          { p1Confirmed: false },
+
+          {
+            p1Confirmed: {
+              $exists: false,
             },
+          },
+        ],
+      }),
 
-            {
-              p1Confirmed: {
-                $exists: false,
-              },
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_REVIEW,
+
+        $or: [
+          { p2Confirmed: false },
+
+          {
+            p2Confirmed: {
+              $exists: false,
             },
-          ],
-        }),
-
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.LAWYER_REVIEW,
-
-          $or: [
-            {
-              p2Confirmed: false,
-            },
-
-            {
-              p2Confirmed: {
-                $exists: false,
-              },
-            },
-          ],
-        }),
+          },
+        ],
+      }),
 
       // ILA
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.LAWYER_ILA_PENDING,
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_ILA_PENDING,
 
-          $or: [
-            {
-              p1ILACompleted: false,
+        $or: [
+          { p1ILACompleted: false },
+
+          {
+            p1ILACompleted: {
+              $exists: false,
             },
+          },
+        ],
+      }),
 
-            {
-              p1ILACompleted: {
-                $exists: false,
-              },
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_ILA_PENDING,
+
+        $or: [
+          { p2ILACompleted: false },
+
+          {
+            p2ILACompleted: {
+              $exists: false,
             },
-          ],
-        }),
-
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.LAWYER_ILA_PENDING,
-
-          $or: [
-            {
-              p2ILACompleted: false,
-            },
-
-            {
-              p2ILACompleted: {
-                $exists: false,
-              },
-            },
-          ],
-        }),
+          },
+        ],
+      }),
 
       // COMPLETED
 
-      this.caseModel
-        .countDocuments({
-          workflowStatus:
-            CaseWorkflowStatus.COMPLETED,
-        }),
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.COMPLETED,
+      }),
 
       // ARCHIVE
 
-      this.caseModel
-        .countDocuments({
-          readyForArchive: true,
-        }),
+      this.countMine(assigned, {
+        readyForArchive: true,
+      }),
     ]);
 
     return {
@@ -1254,41 +1373,51 @@ export class LawyerService {
   async stageSummary(
     userId: string,
   ) {
+    // Scoped to the caller's assigned cases, same as `dashboard`.
+    const assigned =
+      await this.assignedCaseFilter(
+        userId,
+      );
+
+    const [
+      lawyersAssigned,
+      review,
+      ila,
+      signoff,
+      completed,
+    ] = await Promise.all([
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYERS_ASSIGNED,
+      }),
+
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_REVIEW,
+      }),
+
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_ILA_PENDING,
+      }),
+
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.LAWYER_SIGNOFF_COMPLETE,
+      }),
+
+      this.countMine(assigned, {
+        workflowStatus:
+          CaseWorkflowStatus.COMPLETED,
+      }),
+    ]);
+
     return {
-      lawyersAssigned:
-        await this.caseModel
-          .countDocuments({
-            workflowStatus:
-              CaseWorkflowStatus.LAWYERS_ASSIGNED,
-          }),
-
-      review:
-        await this.caseModel
-          .countDocuments({
-            workflowStatus:
-              CaseWorkflowStatus.LAWYER_REVIEW,
-          }),
-
-      ila:
-        await this.caseModel
-          .countDocuments({
-            workflowStatus:
-              CaseWorkflowStatus.LAWYER_ILA_PENDING,
-          }),
-
-      signoff:
-        await this.caseModel
-          .countDocuments({
-            workflowStatus:
-              CaseWorkflowStatus.LAWYER_SIGNOFF_COMPLETE,
-          }),
-
-      completed:
-        await this.caseModel
-          .countDocuments({
-            workflowStatus:
-              CaseWorkflowStatus.COMPLETED,
-          }),
+      lawyersAssigned,
+      review,
+      ila,
+      signoff,
+      completed,
     };
   }
 
@@ -2228,62 +2357,158 @@ export class LawyerService {
   // =====================================================
 
   // =====================================================
-  // MY CASES (active)
+  // MY CASES (every case assigned to the caller)
   // =====================================================
 
+  /**
+   * Every case this lawyer is assigned to.
+   *
+   * `scope` narrows the list; the default is "all" because the portal's
+   * dashboard derives its own stage counts (total / onboarding / onboarded /
+   * completed) from this one response.
+   *
+   *   all       - every assigned case (default)
+   *   active    - still in flight: not completed, cancelled or archived
+   *   completed - COMPLETED only
+   *
+   * `status` filters to one or more exact workflow statuses instead.
+   */
   async myCases(
     userId: string,
+    options: {
+      scope?: string;
+      status?: string | string[];
+    } = {},
   ) {
-    const lawyerObjId =
-      new Types.ObjectId(userId);
+    const assigned =
+      await this.assignedCaseFilter(
+        userId,
+      );
+
+    const criteria: Record<
+      string,
+      any
+    >[] = [assigned];
+
+    const statuses =
+      this.parseStatuses(
+        options.status,
+      );
+
+    if (statuses.length) {
+      criteria.push({
+        workflowStatus: {
+          $in: statuses,
+        },
+      });
+    } else {
+      const scope = (
+        options.scope ?? 'all'
+      )
+        .toString()
+        .trim()
+        .toLowerCase();
+
+      if (scope === 'active') {
+        criteria.push({
+          workflowStatus: {
+            $nin: [
+              CaseWorkflowStatus.COMPLETED,
+              CaseWorkflowStatus.CANCELLED,
+              CaseWorkflowStatus.ARCHIVED,
+            ],
+          },
+        });
+      } else if (
+        scope === 'completed'
+      ) {
+        criteria.push({
+          workflowStatus:
+            CaseWorkflowStatus.COMPLETED,
+        });
+      }
+    }
 
     return this.caseModel
-      .find({
-        workflowStatus: {
-          $nin: [
-            CaseWorkflowStatus.COMPLETED,
-            CaseWorkflowStatus.CANCELLED,
-            CaseWorkflowStatus.ARCHIVED,
-          ],
-        },
-
-        $or: [
-          { assignedLawyerP1: lawyerObjId },
-          { assignedLawyerP2: lawyerObjId },
-        ],
-      })
+      .find({ $and: criteria })
       .populate('owner')
       .populate('invitedUser')
+      .populate('assignedCaseManager')
       .populate('assignedLawyerP1')
       .populate('assignedLawyerP2')
-      .sort({ createdAt: -1 });
+      .sort({ updatedAt: -1, createdAt: -1 });
+  }
+
+  /**
+   * Accepts a single status, a repeated query param, or a comma-separated list,
+   * and keeps only the values the workflow actually defines — an unknown status
+   * must not silently widen the filter to every case.
+   */
+  private parseStatuses(
+    status?: string | string[],
+  ): string[] {
+    if (!status) {
+      return [];
+    }
+
+    const known = new Set<string>(
+      Object.values(
+        CaseWorkflowStatus,
+      ),
+    );
+
+    const requested = (
+      Array.isArray(status)
+        ? status
+        : [status]
+    )
+      .flatMap((s) =>
+        String(s).split(','),
+      )
+      .map((s) =>
+        s.trim().toUpperCase(),
+      )
+      .filter(Boolean);
+
+    const unknown = requested.filter(
+      (s) => !known.has(s),
+    );
+
+    if (unknown.length) {
+      throw new BadRequestException(
+        `Unknown case status: ${unknown.join(', ')}`,
+      );
+    }
+
+    return [...new Set(requested)];
   }
 
   // =====================================================
   async completedCases(
     userId: string,
   ) {
+    const assigned =
+      await this.assignedCaseFilter(
+        userId,
+      );
+
     return this.caseModel
       .find({
-        workflowStatus:
-          CaseWorkflowStatus.COMPLETED,
-
-        $or: [
-          {
-            assignedLawyerP1:
-              new Types.ObjectId(
-                userId,
-              ),
-          },
+        $and: [
+          assigned,
 
           {
-            assignedLawyerP2:
-              new Types.ObjectId(
-                userId,
-              ),
+            workflowStatus: {
+              $in: [
+                CaseWorkflowStatus.COMPLETED,
+                CaseWorkflowStatus.ARCHIVED,
+              ],
+            },
           },
         ],
       })
+      .populate('owner')
+      .populate('invitedUser')
       .populate(
         'assignedLawyerP1',
       )
@@ -2292,6 +2517,7 @@ export class LawyerService {
       )
       .sort({
         completedAt: -1,
+        updatedAt: -1,
       });
   }
 

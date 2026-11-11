@@ -9,6 +9,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
   NotFoundException,
@@ -27,6 +28,7 @@ import { ResolvePartnerConflictDto } from './dto/resolve-partner-conflict.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
+import { PayCaseDto } from './dto/pay-case.dto';
 import { MatrimonialAgreementDto } from './dto/matrimonial-agreement.dto';
 
 // IMPORTANT:
@@ -508,6 +510,47 @@ export class CasesController {
     return this.casesService.unlockCase(
       id,
       user.id,
+    );
+  }
+
+  // ============================================================
+  // PAYMENT (the client's own payment screen)
+  // GET  /cases/:id/payment   - the service, its price and whether it is paid
+  // POST /cases/:id/pay       - take the (dummy) payment and record it
+  //
+  // Both are for the couple on the case, not for staff. The price is never
+  // read from the request: the server prices the chosen service itself.
+  // ============================================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/payment')
+  async getPayment(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Query('service') service?: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.getCasePayment(
+      id,
+      (user.id ?? user._id).toString(),
+      service,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/pay')
+  async pay(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() dto: PayCaseDto,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.casesService.payForCase(
+      id,
+      (user.id ?? user._id).toString(),
+      dto,
     );
   }
 

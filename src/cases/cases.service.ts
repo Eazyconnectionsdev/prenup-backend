@@ -48,6 +48,12 @@ import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { PartnerInviteService } from './partner-invite.service';
 import { generateCaseNumber } from '../utils/case-number.util';
 import { canViewCase } from './case-access.util';
+import {
+  PAYMENT_CURRENCY,
+  formatGbp,
+  isPayableAgreementType,
+  priceFor,
+} from './service-pricing';
 
 // Deliberately vague: it must not reveal whether the address has an account
 // or who it is linked to.
@@ -862,6 +868,211 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     );
     return this.getInvite(caseId, true);
   }
+  // ============================================================
+  // DUMMY PAYMENT (the client's own payment screen)
+  //
+  // There is no payment provider wired up yet, so this stands in for one: it
+  // checks who is paying and what the price is, records the payment on the
+  // case together with the service it bought, and moves the case out of
+  // NOT_PAID. The card number never leaves this method.
+  // ============================================================
+
+  // What the payment screen needs to render: the chosen service, its price,
+  // and whether the case has already been paid for.
+  async getCasePayment(caseId: string, userId: string, agreementTypeHint?: string) {
+    const { case: c } = await this.loadCaseForPayer(caseId, userId);
+
+    // The screen may be opened straight after a service was chosen, before the
+    // client's cached case has caught up, so an explicit service wins.
+    const agreementType = isPayableAgreementType(agreementTypeHint)
+      ? agreementTypeHint
+      : (c.agreementType ?? null);
+
+    const price = priceFor(agreementType);
+    const paid =
+      !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED;
+
+    return {
+      caseId: c._id.toString(),
+      caseNumber: c.caseNumber ?? null,
+      agreementType,
+      serviceName: price?.name ?? null,
+      serviceDescription: price?.description ?? null,
+      amount: price?.amount ?? 0,
+      currency: PAYMENT_CURRENCY,
+      display: formatGbp(price?.amount ?? 0),
+      payable: isPayableAgreementType(agreementType),
+      paid,
+      paymentStatus: c.paymentStatus ?? PaymentStatus.PENDING,
+      payment: this.publicPayment(c.payment),
+    };
+  }
+
+  async payForCase(
+    caseId: string,
+    userId: string,
+    dto: {
+      agreementType?: string;
+      email: string;
+      cardNumber: string;
+      expiry: string;
+      cvc: string;
+      nameOnCard: string;
+      country: string;
+      postalCode: string;
+    },
+  ) {
+    const { case: c } = await this.loadCaseForPayer(caseId, userId);
+
+    if (c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED) {
+      throw new ConflictException('This case has already been paid for');
+    }
+
+    // The service the payment is for: what was sent, otherwise what is already
+    // on the case. Either way it has to be one that can actually be bought.
+    const agreementType = dto.agreementType ?? c.agreementType ?? null;
+    if (!isPayableAgreementType(agreementType)) {
+      throw new BadRequestException(
+        'Choose the service you want before paying for it',
+      );
+    }
+
+    const price = priceFor(agreementType)!;
+
+    const digits = dto.cardNumber.replace(/\D/g, '');
+    const last4 = digits.slice(-4);
+    const brand = this.cardBrand(digits);
+    const reference = 'PAY-' +
+      Date.now().toString(36).toUpperCase() +
+      '-' +
+      crypto.randomBytes(3).toString('hex').toUpperCase();
+
+    const previousStatus = c.paymentStatus ?? PaymentStatus.PENDING;
+    const previousAgreementType = c.agreementType ?? null;
+
+    // Paying for a service is also a choice of that service, so the case's own
+    // agreementType is brought in line with what was bought.
+    c.agreementType = agreementType;
+    c.paymentCompleted = true;
+    c.paymentStatus = PaymentStatus.COMPLETED;
+    c.workflowStatus = CaseWorkflowStatus.DRAFT;
+    c.payment = {
+      provider: 'dummy',
+      reference,
+      status: PaymentStatus.COMPLETED,
+      agreementType,
+      amount: price.amount,
+      currency: PAYMENT_CURRENCY,
+      email: dto.email,
+      nameOnCard: dto.nameOnCard,
+      cardBrand: brand,
+      cardLast4: last4,
+      country: dto.country,
+      postalCode: dto.postalCode,
+      paidAt: new Date(),
+      paidBy: new Types.ObjectId(userId),
+    } as any;
+
+    await c.save();
+
+    // The dashboard and the profile read this flag off the user, so the payer
+    // is marked as having paid as well.
+    await this.userModel
+      .updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $set: { paymentDone: true } },
+      )
+      .exec();
+
+    const changedFields: Record<string, { old: any; new: any }> = {
+      paymentStatus: { old: previousStatus, new: PaymentStatus.COMPLETED },
+      paymentCompleted: { old: false, new: true },
+    };
+    if (previousAgreementType !== agreementType) {
+      changedFields.agreementType = {
+        old: previousAgreementType,
+        new: agreementType,
+      };
+    }
+
+    this.recordAudit({
+      caseId: c._id,
+      userId,
+      action: AuditAction.PAYMENT_SUCCEEDED,
+      module: AuditModuleName.PAYMENT,
+      stage: 'Registration and payment',
+      notes:
+        'Paid ' +
+        formatGbp(price.amount) +
+        ' for ' +
+        price.name +
+        ' (test payment, ref ' +
+        reference +
+        ')',
+      changedFields,
+    });
+
+    return {
+      paid: true,
+      caseId: c._id.toString(),
+      caseNumber: c.caseNumber ?? null,
+      agreementType,
+      serviceName: price.name,
+      amount: price.amount,
+      currency: PAYMENT_CURRENCY,
+      display: formatGbp(price.amount),
+      paymentStatus: c.paymentStatus,
+      workflowStatus: c.workflowStatus,
+      payment: this.publicPayment(c.payment),
+    };
+  }
+
+  // Only the two people on the case may see or make its payment. Staff are
+  // left out on purpose: a case manager marking a case paid goes through
+  // markPaymentCompleted, which is audited as a staff correction.
+  private async loadCaseForPayer(caseId: string, userId: string) {
+    if (!Types.ObjectId.isValid(caseId)) {
+      throw new BadRequestException('Invalid case id');
+    }
+    const c = await this.caseModel.findById(caseId);
+    if (!c) throw new NotFoundException('Case not found');
+
+    const isOwner = c.owner?.toString() === userId.toString();
+    const isPartner = c.invitedUser?.toString() === userId.toString();
+    if (!isOwner && !isPartner) {
+      throw new ForbiddenException('This is not your case');
+    }
+
+    return { case: c, isOwner };
+  }
+
+  // Worked out from the leading digits, for the receipt line only.
+  private cardBrand(digits: string): string {
+    if (/^4/.test(digits)) return 'Visa';
+    if (/^(5[1-5]|2[2-7])/.test(digits)) return 'Mastercard';
+    if (/^3[47]/.test(digits)) return 'American Express';
+    if (/^6(011|5)/.test(digits)) return 'Discover';
+    return 'Card';
+  }
+
+  // Never returns anything that could be used to charge the card again.
+  private publicPayment(payment?: any | null) {
+    if (!payment) return null;
+    return {
+      reference: payment.reference ?? null,
+      status: payment.status ?? null,
+      agreementType: payment.agreementType ?? null,
+      amount: payment.amount ?? 0,
+      currency: payment.currency ?? PAYMENT_CURRENCY,
+      display: formatGbp(payment.amount ?? 0),
+      cardBrand: payment.cardBrand ?? null,
+      cardLast4: payment.cardLast4 ?? null,
+      email: payment.email ?? null,
+      nameOnCard: payment.nameOnCard ?? null,
+      paidAt: payment.paidAt ?? null,
+    };
+  }
+
   async markPaymentCompleted(caseId: string, actorId: string) {
     const c = await this.caseModel.findById(caseId);
 
