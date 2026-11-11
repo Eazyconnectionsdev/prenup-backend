@@ -2,6 +2,7 @@
 
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { caseTrackingPlugin } from '../../tracking/case-tracking.plugin';
 
 export type CaseDocument = Case & Document;
 
@@ -247,6 +248,7 @@ export enum PaymentStatus {
   INITIATED = 'INITIATED',
   FAILED = 'FAILED',
   COMPLETED = 'COMPLETED',
+  PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED',
   REFUNDED = 'REFUNDED',
 }
 
@@ -792,15 +794,17 @@ export class Case {
   })
   paymentStatus!: PaymentStatus;
 
-  // What was paid, and for which service. paymentStatus above stays the one
-  // flag the workflow reads; this holds the detail behind it.
   @Prop({
     type: CasePaymentSchema,
     default: null,
   })
   payment?: CasePayment | null;
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  paidAt?: Date | null;
 
-  // Chosen during onboarding (user 1 only).
   @Prop({
     type: String,
     enum: AGREEMENT_TYPES,
@@ -1358,3 +1362,6 @@ export const CaseSchema =
 // Sparse unique index so existing documents with caseNumber: null are not
 // forced to conflict while still preventing duplicate caseNumbers.
 CaseSchema.index({ caseNumber: 1 }, { unique: true, sparse: true });
+
+// Status, payment and assignment history for the audit reports.
+CaseSchema.plugin(caseTrackingPlugin);

@@ -16,7 +16,7 @@ import {
   AuditModule as AuditModuleName,
 } from '../../common/audit-log/enum/audit-action.enum';
 
-import { Case, CaseWorkflowStatus } from '../schemas/case.schema';
+import { Case, CaseWorkflowStatus, MutualApprovalStatus } from '../schemas/case.schema';
 import { Lawyer } from '../schemas/lawyer.schema';
 
 import { ReturnDraftDto } from './dto/return-draft.dto';
@@ -1321,18 +1321,19 @@ export class CaseManagerService {
   async getCasesByStatus(
     userId: string,
     status: string,
+    role?: string,
   ) {
+    // Every case at this stage, whoever it is assigned to.
     return this.caseModel
-      .find({
-        assignedCaseManager: new Types.ObjectId(userId),
-        workflowStatus: status,
-      })
+      .find({ workflowStatus: status })
       .populate('owner invitedUser assignedCaseManager')
       .sort({ createdAt: -1 })
       .exec();
   }
 
-  async getAllCases(userId: string) {
+  async getAllCases(userId: string, role?: string) {
+    // Every case, from not paid through completed / archived. The Cases page
+    // narrows them with its own stage, payment and case-manager filters.
     return this.caseModel
       .find({})
       .populate('owner invitedUser assignedCaseManager')

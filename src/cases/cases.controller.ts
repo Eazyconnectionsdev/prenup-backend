@@ -35,10 +35,13 @@ import { MatrimonialAgreementDto } from './dto/matrimonial-agreement.dto';
 // Use the NEW unified LawyerService.
 // Do NOT import the old lawyer-manager service.
 import { LawyerService } from '../cases/lawyer-manager/lawyer.service';
+import { RequestContext } from '../common/request-context';
+import { PaymentsService } from '../payments/payments.service';
 
 @Controller('cases')
 export class CasesController {
   constructor(
+    private readonly paymentsService: PaymentsService,
     private readonly casesService: CasesService,
 
     // This is now the unified LawyerService
@@ -107,7 +110,7 @@ export class CasesController {
       this.isPrivilegedRole(user.role);
 
     if (isPrivileged) {
-      return this.casesService.findAll();
+      return this.casesService.findAll({ id: (user.id ?? user._id)?.toString(), role: user.role });
     }
 
     return this.casesService.findByUser(
@@ -576,10 +579,8 @@ export class CasesController {
       );
     }
 
-    return this.casesService.markPaymentCompleted(
-      id,
-      user.id,
-    );
+    // Recorded as a manual transaction so Finance reports stay complete.
+    return this.paymentsService.markPaidManually(id, user);
   }
 
   // ============================================================
@@ -656,9 +657,14 @@ export class CasesController {
     @Req() req: any,
     @Param('id') id: string,
     @Body('managerId') managerId: string,
+    @Body('reason') reason?: string,
   ) {
     const user = this.ensureUser(req);
     const isPrivileged = this.isPrivilegedRole(user.role);
+    // Shown in the Case Assignment History; inferred when not given.
+    if (typeof reason === 'string' && reason.trim()) {
+      RequestContext.set('assignmentReason', reason.trim().slice(0, 500));
+    }
 
     if (!isPrivileged) {
       throw new ForbiddenException(

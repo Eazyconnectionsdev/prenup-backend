@@ -1,15 +1,19 @@
 
 import { ValidationPipe } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
+import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { Express } from 'express';
+import { requestContextMiddleware } from './common/request-context';
+import { SecurityEventService } from './tracking/security-event.service';
+import { SecurityExceptionFilter } from './tracking/security-exception.filter';
 
 async function bootstrap() {
   try {
-    const app = await NestFactory.create(AppModule);
+    // rawBody: Stripe webhooks are verified against the exact bytes sent.
+    const app = await NestFactory.create(AppModule, { rawBody: true });
 
     const port = Number(process.env.PORT) || 5000;
     const host = process.env.HOST || '127.0.0.1';
@@ -30,6 +34,9 @@ async function bootstrap() {
 
     expressApp.use(cookieParser());
 
+    // Who is acting and from where, for the audit records.
+    expressApp.use(requestContextMiddleware);
+
     app.enableCors({
        origin: [frontendOrigin, 'https://app.letsprenup.co.uk'],
       credentials: true,
@@ -39,6 +46,14 @@ async function bootstrap() {
 
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false }),
+    );
+
+    // Refused requests are logged as unauthorized access attempts.
+    app.useGlobalFilters(
+      new SecurityExceptionFilter(
+        app.get(HttpAdapterHost).httpAdapter,
+        app.get(SecurityEventService),
+      ),
     );
 
     const globalPrefix = process.env.GLOBAL_PREFIX || 'api';

@@ -52,9 +52,10 @@ export class CaseManagerController {
   }
 
   @Get('cases')
-async getAllCases() {
-  return this.caseManagerService.getAllCases('');
-}
+  async getAllCases(@Req() req) {
+    const user = this.ensureUser(req);
+    return this.caseManagerService.getAllCases(user.id ?? user._id, user.role);
+  }
 
   // =====================================================
   // DASHBOARD
@@ -91,8 +92,9 @@ async getAllCases() {
     const user = this.ensureUser(req);
 
     return this.caseManagerService.getCasesByStatus(
-      user.id,
+      user.id ?? user._id,
       status,
+      user.role,
     );
   }
 
