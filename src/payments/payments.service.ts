@@ -1,20 +1,3 @@
-// Stripe Checkout payments and refunds, recorded as payment transactions.
-//
-// Flow:
-//  1. The applicant starts checkout -> an INITIATED transaction + a Stripe
-//     Checkout Session; the case moves to payment "Initiated".
-//  2. Stripe confirms (webhook, or the return page verifying the session) ->
-//     the transaction SUCCEEDED, the case is paid and moves NOT_PAID -> DRAFT.
-//  3. Failed card attempts are kept as their own FAILED rows with the reason;
-//     an abandoned checkout expires to CANCELLED.
-//  4. Refunds (issued here or in the Stripe dashboard) arrive as refund
-//     events and are mirrored as REFUND rows; the payment becomes
-//     PARTIALLY_REFUNDED or REFUNDED.
-//
-// Required env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET. Optional:
-// PAYMENT_FEE_GBP (default 499) and per-service PAYMENT_FEE_GBP_PRENUPTIAL /
-// _POSTNUPTIAL / _COHABITATION.
-
 import {
   BadRequestException,
   ForbiddenException,
@@ -63,7 +46,6 @@ export class PaymentsService {
     @InjectModel('Counter') private readonly counterModel: Model<any>,
   ) {}
 
-  // ── Setup ──
 
   get configured() {
     return !!process.env.STRIPE_SECRET_KEY;
@@ -83,7 +65,6 @@ export class PaymentsService {
     return `${prefix}-${year}-${String(seq).padStart(6, '0')}`;
   }
 
-  // Fixed fee per service, in pence.
   quote(agreementType?: string | null) {
     const group = serviceGroupOf(agreementType);
     const pounds =
@@ -117,9 +98,6 @@ export class PaymentsService {
     return c;
   }
 
-  // Runs a case change as the system (Stripe confirmed it, not the viewer).
-  // With keepActor, a signed-in staff member who caused it (e.g. issued the
-  // refund) stays the recorded actor.
   private async asSystem<T>(reason: string, fn: () => Promise<T>, keepActor = false): Promise<T> {
     const ctx = RequestContext.get();
     const prev = { system: ctx?.system, statusReason: ctx?.statusReason };
@@ -133,7 +111,6 @@ export class PaymentsService {
     }
   }
 
-  // ── Applicant flow ──
 
   async getCasePayment(caseId: string, user: any) {
     const c = await this.loadCaseFor(caseId, user);
@@ -220,8 +197,6 @@ export class PaymentsService {
     return { url: session.url, sessionId: session.id, transactionId };
   }
 
-  // Called by the return page so the case is up to date even before (or
-  // without) the webhook.
   async verifySession(sessionId: string, user: any) {
     const session = await this.stripe().checkout.sessions.retrieve(sessionId);
     const caseId = session?.metadata?.caseId || session?.client_reference_id;
@@ -237,7 +212,6 @@ export class PaymentsService {
     };
   }
 
-  // ── Webhooks ──
 
   async handleWebhook(rawBody: Buffer | undefined, signature: string | undefined) {
     const secret = process.env.STRIPE_WEBHOOK_SECRET;

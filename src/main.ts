@@ -10,7 +10,26 @@ import { requestContextMiddleware } from './common/request-context';
 import { SecurityEventService } from './tracking/security-event.service';
 import { SecurityExceptionFilter } from './tracking/security-exception.filter';
 
+// Node's default is to print the error and exit, so one stray async failure
+// in a single request (a Chromium render, a mail send, a background write)
+// took the whole API down and every other request then failed. Log it loudly
+// and keep serving; the request that caused it still gets its own error.
+function installProcessGuards() {
+  process.on('unhandledRejection', (reason) => {
+    console.error(
+      '[unhandledRejection] a promise rejected with no handler:',
+      reason instanceof Error ? reason.stack : reason,
+    );
+  });
+
+  process.on('uncaughtException', (err, origin) => {
+    console.error(`[uncaughtException] (${origin}):`, err?.stack ?? err);
+  });
+}
+
 async function bootstrap() {
+  installProcessGuards();
+
   try {
     // rawBody: Stripe webhooks are verified against the exact bytes sent.
     const app = await NestFactory.create(AppModule, { rawBody: true });

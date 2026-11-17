@@ -4,11 +4,16 @@ import { Model, isValidObjectId } from 'mongoose';
 import { Case } from '../schemas/case.schema';
 import { Lawyer } from '../schemas/lawyer.schema';
 import { User } from '../../users/schemas/user.schema';
-import { isAssignedLawyer, isStaffRole } from '../case-access.util';
+import {
+  CASE_LAWYER_FIELDS,
+  CaseLawyerRefs,
+  isAssignedLawyer,
+  isStaffRole,
+} from '../case-access.util';
 
 /**
- * For the lawyer portal's case routes (`/lawyer/:caseId/...`): staff, or the
- * lawyer assigned to that case. Clients and other lawyers are refused, so a
+ * For the lawyer portal's case routes (`/lawyer/:caseId/...`): staff, or a
+ * lawyer acting on that case. Clients and other lawyers are refused, so a
  * signed-in user cannot read or advance a case they have no part in. Routes
  * without a `:caseId` (dashboard, lists, lawyer management) pass through; they
  * have their own role checks or only return the caller's own data.
@@ -34,9 +39,9 @@ export class LawyerCaseGuard implements CanActivate {
     if (!isValidObjectId(caseId)) return true;
     const c = (await this.caseModel
       .findById(caseId)
-      .select('assignedLawyerP1 assignedLawyerP2')
+      .select(CASE_LAWYER_FIELDS)
       .lean()
-      .exec()) as { assignedLawyerP1?: any; assignedLawyerP2?: any } | null;
+      .exec()) as CaseLawyerRefs | null;
     if (!c) return true;
 
     if (await isAssignedLawyer({ user: this.userModel, lawyer: this.lawyerModel }, c, actor)) {

@@ -530,18 +530,8 @@ export class AuthService {
       };
     }
 
-    try {
-      await this.mailService.sendInviteCredentials(
-        email,
-        password,
-        caseDoc.caseNumber ?? caseDoc._id.toString(),
-      );
-    } catch (err) {
-      this.logger?.error?.(
-        'Failed to send invite credentials email',
-        err as any,
-      );
-    }
+    // The partner chose their own password on the registration form, so there
+    // is nothing to send them: a password is never put in an email.
 
     // Capture registration location for the invited partner (fire-and-forget)
     void this.locationService.capture(createdId, ip, 'registration');

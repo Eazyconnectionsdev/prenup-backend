@@ -6,6 +6,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { userDisplayName } from '../common/request-context';
 import { CaseStatusHistory } from '../tracking/schemas/tracking.schemas';
+import { assignedLawyerFilter, caseLawyerIds } from '../cases/case-access.util';
 import { SERVICE_GROUP_LABELS, serviceGroupOf, WORKFLOW_ORDER, workflowLabel } from '../tracking/labels';
 import {
   dateMatch,
@@ -73,6 +74,8 @@ const CASE_FIELDS = [
   'assignedCaseManager',
   'assignedLawyerP1',
   'assignedLawyerP2',
+  'preQuestionnaireUser1.selectedLawyer',
+  'preQuestionnaireUser2.selectedLawyer',
   'cmApprovedAt',
   'lawyersAssignedAt',
   'lawyerReviewCompletedAt',
@@ -120,7 +123,7 @@ export class CaseReportsService {
     if (f.firmId) {
       const lawyers = await this.lawyerModel.find({ company: f.firmId }).select('_id').lean();
       const ids = lawyers.map((l) => l._id);
-      q.$or = [{ assignedLawyerP1: { $in: ids } }, { assignedLawyerP2: { $in: ids } }];
+      q.$or = assignedLawyerFilter(ids).$or;
     }
     if (f.caseQuery) q.caseNumber = { $regex: escapeRegex(f.caseQuery), $options: 'i' };
     return q;
@@ -298,8 +301,9 @@ export class CaseReportsService {
     }
     for (const c of cases as any[]) {
       // A case counts once per firm, even when both solicitors are from it.
+      const { p1, p2 } = caseLawyerIds(c);
       const firms = new Set(
-        [c.assignedLawyerP1, c.assignedLawyerP2]
+        [p1, p2]
           .filter(Boolean)
           .map((id) => firmOfLawyer.get(String(id)))
           .filter(Boolean) as string[],
@@ -335,9 +339,10 @@ export class CaseReportsService {
       });
     }
     for (const c of cases as any[]) {
+      const { p1, p2 } = caseLawyerIds(c);
       for (const [lawyerId, signed] of [
-        [c.assignedLawyerP1, c.p1LawyerSigned],
-        [c.assignedLawyerP2, c.p2LawyerSigned],
+        [p1, c.p1LawyerSigned],
+        [p2, c.p2LawyerSigned],
       ] as const) {
         if (!lawyerId) continue;
         const r = rows.get(String(lawyerId));
@@ -459,7 +464,8 @@ export class CaseReportsService {
     const lawyerIds = new Set<string>();
     for (const c of all as any[]) {
       [c.owner, c.invitedUser, c.assignedCaseManager].filter(Boolean).forEach((id) => userIds.add(String(id)));
-      [c.assignedLawyerP1, c.assignedLawyerP2].filter(Boolean).forEach((id) => lawyerIds.add(String(id)));
+      const { p1, p2 } = caseLawyerIds(c);
+      [p1, p2].filter(Boolean).forEach((id) => lawyerIds.add(String(id)));
     }
     const [users, lawyers, dir] = await Promise.all([
       this.userModel.find({ _id: { $in: [...userIds] } }).select('firstName middleName lastName email').lean(),
@@ -481,8 +487,9 @@ export class CaseReportsService {
       const days = Math.max(0, Math.floor((now.getTime() - entered.getTime()) / 86400000));
       const sla = slaDays(c.workflowStatus);
       const cm = nameOf(userName, c.assignedCaseManager);
-      const p1 = nameOf(lawyerName, c.assignedLawyerP1);
-      const p2 = nameOf(lawyerName, c.assignedLawyerP2);
+      const lawyers = caseLawyerIds(c);
+      const p1 = nameOf(lawyerName, lawyers.p1);
+      const p2 = nameOf(lawyerName, lawyers.p2);
       const applicants = [nameOf(userName, c.owner), nameOf(userName, c.invitedUser)].filter(Boolean).join(' & ');
       const lawyersText = [p1, p2].filter(Boolean).join(' / ') || 'Lawyers (not assigned)';
       const responsible: Record<string, string> = {

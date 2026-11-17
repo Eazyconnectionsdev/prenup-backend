@@ -49,6 +49,7 @@ import { MailModule } from '../mail/mail.module';
 import { UsersModule } from '../users/users.module';
 
 import { LawyerModule } from './lawyer-manager/lawyer.module';
+import { AgreementModule } from '../agreement/agreement.module';
 
 @Module({
   imports: [
@@ -100,6 +101,8 @@ import { LawyerModule } from './lawyer-manager/lawyer.module';
 
     // IMPORTANT
     LawyerModule,
+
+    AgreementModule,
   ],
 
   providers: [

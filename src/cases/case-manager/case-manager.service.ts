@@ -551,6 +551,13 @@ export class CaseManagerService {
 
     await caseDoc.save();
 
+    // Approval freezes the CM draft as what the solicitors work from: carry it
+    // into the lawyer stage now, so check-out has a baseline waiting for it.
+    await this.agreementService.ensureLawyerStageInitialized(
+      caseId,
+      userId,
+    );
+
     this.recordAudit({
       caseId,
       userId,
