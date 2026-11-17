@@ -7,6 +7,7 @@ import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { S3Service } from 'src/common/s3.service';
 import { Case, CaseDocument } from '../cases/schemas/case.schema';
+import { caseLawyerIds } from '../cases/case-access.util';
 import {
   AgreementVersion,
   AgreementDocument,
@@ -24,6 +25,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { buildAgreementDocxBuffer } from './agreement-document.builder';
+import { renderHtmlToPdf } from './pdf-renderer';
 
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AUDIT_EVENT } from '../common/audit-log/events/audit.event';
@@ -93,14 +95,12 @@ export class AgreementService {
     private eventEmitter: EventEmitter2,
   ) { }
 
-  // User agreement Generation code
 
   async generateAgreementDocument(
     caseId: string,
     actorId: string,
   ): Promise<VersionResult> {
 
-    // Called by whichever partner gives the final approval, so both may generate
     const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId, [
       'OWNER',
       'INVITED_USER',
@@ -119,64 +119,55 @@ export class AgreementService {
       jointInformation: (c as any).jointInformation,
     });
 
-    const latestUserVersion = await this.documentVersion
-      .findOne({ caseId: c._id, majorVersion: AgreementStage.USER })
-      .sort({ minorVersion: -1 })
-      .exec();
-
-    const latestOverall = await this.documentVersion
-      .findOne({ caseId: c._id })
-      .sort({ majorVersion: -1, minorVersion: -1 })
-      .exec();
-
-    const nextMinor = latestUserVersion
-      ? latestUserVersion.minorVersion + 1
-      : 0;
-
     const fileName = `agreement-${caseId}-${Date.now()}`;
     const upload = await this.uploadDocxAndPdf(buffer, fileName);
-
-    await this.documentVersion.updateMany(
-      { caseId: c._id },
-      { isCurrent: false },
-    );
 
     const checksum = createHash('sha256').update(buffer).digest('hex');
     const roleMeta = this.resolveEndUserRoleMeta(c, actorObjId);
 
-    const versionDoc = await this.documentVersion.create({
-      caseId: c._id,
-      majorVersion: AgreementStage.USER,
-      minorVersion: nextMinor,
-      s3Bucket: Config.aws.s3.bucketName,
-      s3Key: upload.docxS3Key,
-      s3Url: upload.docxUrl,
-      pdfS3Key: upload.pdfS3Key,
-      pdfUrl: upload.pdfUrl,
-      originalFileName: `agreement-V${AgreementStage.USER}.${nextMinor}_Master.docx`,
-      mimeType: DOCX_MIME_TYPE,
-      fileSizeBytes: buffer.length,
-      checksum,
-      checkedInBy: actorObjId,
-      checkedInByRole: roleMeta.checkedInByRole,
-      roleTag: roleMeta.roleTag,
-      versionLabel: roleMeta.versionLabel,
-      isCurrent: true,
-      previousVersionId: latestOverall?._id ?? null,
-    });
-
-    const isLockDocument = await this.lockModel.find({
-      caseId: c._id,
-    });
-
-    if (!isLockDocument) {
-      await this.lockModel.create({
+    const versionDoc = await this.createVersionWithRetry(
+      c._id,
+      AgreementStage.USER,
+      0,
+      (minorVersion, previousVersionId) => ({
         caseId: c._id,
-        lockedBy: null,
-        lockedByRole: null,
-        lockedAt: new Date(),
-      });
-    }
+        majorVersion: AgreementStage.USER,
+        minorVersion,
+        s3Bucket: Config.aws.s3.bucketName,
+        s3Key: upload.docxS3Key,
+        s3Url: upload.docxUrl,
+        pdfS3Key: upload.pdfS3Key,
+        pdfUrl: upload.pdfUrl,
+        originalFileName: `agreement-V${AgreementStage.USER}.${minorVersion}_Master.docx`,
+        mimeType: DOCX_MIME_TYPE,
+        fileSizeBytes: buffer.length,
+        checksum,
+        checkedInBy: actorObjId,
+        checkedInByRole: roleMeta.checkedInByRole,
+        roleTag: roleMeta.roleTag,
+        versionLabel: roleMeta.versionLabel,
+        isCurrent: true,
+        previousVersionId,
+      }),
+    );
+
+    const nextMinor = versionDoc.minorVersion;
+
+    // This used to be `find()`, whose array result is always truthy, so the
+    // lock row was never created. An upsert also keeps two concurrent
+    // generations from both inserting one.
+    await this.lockModel.updateOne(
+      { caseId: c._id },
+      {
+        $setOnInsert: {
+          caseId: c._id,
+          lockedBy: null,
+          lockedByRole: null,
+          lockedAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
 
     this.eventEmitter.emit(AUDIT_EVENT, {
       module: AuditModuleEnum.AGREEMENT,
@@ -201,7 +192,6 @@ export class AgreementService {
     };
   }
 
-  // Case Manager agreement Generation code
 
   async cmGenerateDocument(
     caseId: string,
@@ -217,49 +207,38 @@ export class AgreementService {
       jointInformation: (c as any).jointInformation,
     });
 
-    const latestCmVersion = await this.documentVersion
-      .findOne({ caseId: c._id, majorVersion: AgreementStage.CM })
-      .sort({ minorVersion: -1 })
-      .exec();
-
-    const latestOverall = await this.documentVersion
-      .findOne({ caseId: c._id })
-      .sort({ majorVersion: -1, minorVersion: -1 })
-      .exec();
-
-    const nextMinor = latestCmVersion ? latestCmVersion.minorVersion + 1 : 0;
-
     const fileName = `agreement-${caseId}-${Date.now()}`;
     const upload = await this.uploadDocxAndPdf(buffer, fileName);
 
-    await this.documentVersion.updateMany(
-      { caseId: c._id },
-      { isCurrent: false },
-    );
-
     const checksum = createHash('sha256').update(buffer).digest('hex');
 
-    const versionDoc = await this.documentVersion.create({
-      caseId: c._id,
-      majorVersion: AgreementStage.CM,
-      minorVersion: nextMinor,
-      s3Bucket: Config.aws.s3.bucketName,
-      s3Key: upload.docxS3Key,
-      s3Url: upload.docxUrl,
-      pdfS3Key: upload.pdfS3Key,
-      pdfUrl: upload.pdfUrl,
-      originalFileName: `agreement-V${AgreementStage.CM}.${nextMinor}_Master.docx`,
-      mimeType: DOCX_MIME_TYPE,
-      fileSizeBytes: buffer.length,
-      checksum,
-      checkedInBy: actorObjId,
-      checkedInByRole: 'Case Manager',
+    const versionDoc = await this.createVersionWithRetry(
+      c._id,
+      AgreementStage.CM,
+      0,
+      (minorVersion, previousVersionId) => ({
+        caseId: c._id,
+        majorVersion: AgreementStage.CM,
+        minorVersion,
+        s3Bucket: Config.aws.s3.bucketName,
+        s3Key: upload.docxS3Key,
+        s3Url: upload.docxUrl,
+        pdfS3Key: upload.pdfS3Key,
+        pdfUrl: upload.pdfUrl,
+        originalFileName: `agreement-V${AgreementStage.CM}.${minorVersion}_Master.docx`,
+        mimeType: DOCX_MIME_TYPE,
+        fileSizeBytes: buffer.length,
+        checksum,
+        checkedInBy: actorObjId,
+        checkedInByRole: 'Case Manager',
+        roleTag: 'CM',
+        versionLabel: 'Case Manager Version',
+        isCurrent: true,
+        previousVersionId,
+      }),
+    );
 
-      roleTag: 'CM',
-      versionLabel: 'Case Manager Version',
-      isCurrent: true,
-      previousVersionId: latestOverall?._id ?? null,
-    });
+    const nextMinor = versionDoc.minorVersion;
 
     this.eventEmitter.emit(AUDIT_EVENT, {
       module: AuditModuleEnum.AGREEMENT,
@@ -287,6 +266,120 @@ export class AgreementService {
     };
   }
 
+  // Whether the CM stage is initialized, and if not, whether it can be
+  // (it copies the latest partner-approved version)
+  async getCmStageReadiness(
+    caseId: string,
+  ): Promise<{ initialized: boolean; canInitialize: boolean }> {
+    const id = new Types.ObjectId(caseId);
+    const [baseline, userVersion] = await Promise.all([
+      this.documentVersion.exists({ caseId: id, majorVersion: AgreementStage.CM }),
+      this.documentVersion.exists({ caseId: id, majorVersion: AgreementStage.USER }),
+    ]);
+    return { initialized: !!baseline, canInitialize: !!baseline || !!userVersion };
+  }
+
+  // Creates the CM-stage baseline on demand; does nothing if it already
+  // exists. Called when a case manager is assigned to the case, so the CM
+  // opens a draft that is already carried over from the couple's approved
+  // version rather than having to generate one first.
+  async ensureCmStageInitialized(
+    caseId: string,
+    actorId: string,
+  ): Promise<{ initialized: boolean; created: boolean }> {
+    const { initialized, canInitialize } = await this.getCmStageReadiness(caseId);
+    if (initialized) return { initialized: true, created: false };
+    if (!canInitialize) return { initialized: false, created: false };
+    try {
+      await this.initializeCmStage(caseId, actorId);
+    } catch (err: any) {
+      // Reassignment and a concurrent generate can both land here; whoever
+      // loses the race sees the baseline the other just created.
+      const alreadyThere =
+        err instanceof ConflictException || err?.code === 11000;
+      if (!alreadyThere) throw err;
+      return { initialized: true, created: false };
+    }
+    return { initialized: true, created: true };
+  }
+
+  async initializeCmStage(
+    caseId: string,
+    actorId: string,
+  ): Promise<VersionResult> {
+    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId);
+
+    const existingCmBaseline = await this.documentVersion
+      .findOne({ caseId: c._id, majorVersion: AgreementStage.CM })
+      .exec();
+
+    if (existingCmBaseline) {
+      throw new ConflictException(
+        'CM stage has already been initialized for this case',
+      );
+    }
+
+    const latestUserVersion = await this.documentVersion
+      .findOne({ caseId: c._id, majorVersion: AgreementStage.USER })
+      .sort({ minorVersion: -1 })
+      .exec();
+
+    if (!latestUserVersion) {
+      throw new NotFoundException(
+        'No partner-approved document found to carry into the CM stage',
+      );
+    }
+
+    await this.documentVersion.updateMany(
+      { caseId: c._id },
+      { isCurrent: false },
+    );
+
+    // Same underlying files as the couple's version — reuse both docx and pdf
+    // rather than reconverting an identical document.
+    const versionDoc = await this.documentVersion.create({
+      caseId: c._id,
+      majorVersion: AgreementStage.CM,
+      minorVersion: 0,
+      s3Bucket: latestUserVersion.s3Bucket,
+      s3Key: latestUserVersion.s3Key,
+      s3Url: latestUserVersion.s3Url,
+      pdfS3Key: latestUserVersion.pdfS3Key,
+      pdfUrl: latestUserVersion.pdfUrl,
+      originalFileName: `agreement-V${AgreementStage.CM}.0_Master.docx`,
+      mimeType: DOCX_MIME_TYPE,
+      fileSizeBytes: latestUserVersion.fileSizeBytes,
+      checksum: latestUserVersion.checksum,
+      checkedInBy: actorObjId,
+      checkedInByRole: 'Case Manager',
+      roleTag: 'CM',
+      versionLabel: 'Case Manager Stage Baseline',
+      isCurrent: true,
+      previousVersionId: latestUserVersion._id,
+    });
+
+    this.eventEmitter.emit(AUDIT_EVENT, {
+      module: AuditModuleEnum.AGREEMENT,
+      entityType: 'AgreementVersion',
+      entityId: versionDoc._id,
+      caseId: c._id,
+      action: AuditAction.STATUS_CHANGED,
+      userId: actorObjId,
+      notes: `CM stage initialized — baseline version ${AgreementStage.CM}.0 created`,
+    });
+
+    return {
+      success: true,
+      fileName: versionDoc.originalFileName,
+      s3Key: versionDoc.s3Key,
+      url: versionDoc.s3Url ?? versionDoc.s3Key,
+      pdfUrl: versionDoc.pdfUrl,
+      majorVersion: versionDoc.majorVersion,
+      minorVersion: versionDoc.minorVersion,
+      versionId: versionDoc._id,
+    };
+  }
+
   // Whether the lawyer stage is initialized, and if not, whether it can be
   // (it copies the latest CM-approved version)
   async getLawyerStageReadiness(
@@ -300,7 +393,12 @@ export class AgreementService {
     return { initialized: !!baseline, canInitialize: !!baseline || !!cmVersion };
   }
 
-  // Used when the CM assigns lawyers; does nothing if already initialized
+  // Creates the lawyer-stage baseline on demand; does nothing if it already
+  // exists. The trigger is the case manager approving the case
+  // (CaseManagerService.approveCase), which freezes the approved CM draft as
+  // what the solicitors work from. Also called when the CM assigns lawyers,
+  // and as a backstop on a lawyer's first check-out, for cases approved
+  // before the approval trigger existed.
   async ensureLawyerStageInitialized(
     caseId: string,
     actorId: string,
@@ -308,7 +406,16 @@ export class AgreementService {
     const { initialized, canInitialize } = await this.getLawyerStageReadiness(caseId);
     if (initialized) return { initialized: true, created: false };
     if (!canInitialize) return { initialized: false, created: false };
-    await this.initializeLawyerStage(caseId, actorId);
+    try {
+      await this.initializeLawyerStage(caseId, actorId);
+    } catch (err: any) {
+      // Both lawyers can check out at the same moment. Whoever loses the race
+      // sees the baseline the other just created, which is all they needed.
+      const alreadyThere =
+        err instanceof ConflictException || err?.code === 11000;
+      if (!alreadyThere) throw err;
+      return { initialized: true, created: false };
+    }
     return { initialized: true, created: true };
   }
 
@@ -411,14 +518,18 @@ export class AgreementService {
       );
     }
 
+    // The baseline is created lazily, so this may be the first check-out on
+    // the case: carry the latest CM version over into the lawyer stage now.
+    await this.ensureLawyerStageInitialized(caseId, lawyerId);
+
     const latestVersion = await this.documentVersion
       .findOne({ caseId: c._id, majorVersion: AgreementStage.LAWYER })
       .sort({ minorVersion: -1 })
       .exec();
 
     if (!latestVersion) {
-      throw new NotFoundException(
-        'Lawyer stage has not been initialized for this case yet',
+      throw new BadRequestException(
+        'The case manager has not finalised a draft for this case yet, so there is nothing to check out',
       );
     }
 
@@ -479,55 +590,40 @@ export class AgreementService {
       throw new ForbiddenException('This document is not checked out by you');
     }
 
-    const latestLawyerVersion = await this.documentVersion
-      .findOne({ caseId: c._id, majorVersion: AgreementStage.LAWYER })
-      .sort({ minorVersion: -1 })
-      .exec();
-
-    const latestOverall = await this.documentVersion
-      .findOne({ caseId: c._id })
-      .sort({ majorVersion: -1, minorVersion: -1 })
-      .exec();
-
-    const nextMinor = latestLawyerVersion
-      ? latestLawyerVersion.minorVersion + 1
-      : 1;
-
     const fileName = `agreement-${caseId}-${Date.now()}`;
     const upload = await this.uploadDocxAndPdf(editedBuffer, fileName);
-
-    await this.documentVersion.updateMany(
-      { caseId: c._id },
-      { isCurrent: false },
-    );
 
     const checksum = createHash('sha256').update(editedBuffer).digest('hex');
     const roleMeta = this.resolveLawyerRoleMeta(lawyerRole);
 
-    const versionDoc = await this.documentVersion.create({
-      caseId: c._id,
-      majorVersion: AgreementStage.LAWYER,
-      minorVersion: nextMinor,
-      s3Bucket: Config.aws.s3.bucketName,
-      s3Key: upload.docxS3Key,
-      s3Url: upload.docxUrl,
-      pdfS3Key: upload.pdfS3Key,
-      pdfUrl: upload.pdfUrl,
-      originalFileName: `agreement-V${AgreementStage.LAWYER}.${nextMinor}_Master.docx`,
+    const versionDoc = await this.createVersionWithRetry(
+      c._id,
+      AgreementStage.LAWYER,
+      1,
+      (minorVersion, previousVersionId) => ({
+        caseId: c._id,
+        majorVersion: AgreementStage.LAWYER,
+        minorVersion,
+        s3Bucket: Config.aws.s3.bucketName,
+        s3Key: upload.docxS3Key,
+        s3Url: upload.docxUrl,
+        pdfS3Key: upload.pdfS3Key,
+        pdfUrl: upload.pdfUrl,
+        originalFileName: `agreement-V${AgreementStage.LAWYER}.${minorVersion}_Master.docx`,
+        mimeType: DOCX_MIME_TYPE,
+        fileSizeBytes: editedBuffer.length,
+        checksum,
+        checkedInBy: actorObjId,
+        checkedInByRole: roleMeta.checkedInByRole,
+        amendmentSummary: amendmentSummary,
+        roleTag: roleMeta.roleTag,
+        versionLabel: roleMeta.versionLabel,
+        isCurrent: true,
+        previousVersionId,
+      }),
+    );
 
-      mimeType: DOCX_MIME_TYPE,
-      fileSizeBytes: editedBuffer.length,
-
-      checksum,
-      checkedInBy: actorObjId,
-      checkedInByRole: roleMeta.checkedInByRole,
-
-      amendmentSummary: amendmentSummary,
-      roleTag: roleMeta.roleTag,
-      versionLabel: roleMeta.versionLabel,
-      isCurrent: true,
-      previousVersionId: latestOverall?._id ?? null,
-    });
+    const nextMinor = versionDoc.minorVersion;
 
     await this.lockModel.deleteOne({ caseId: c._id }).exec();
 
@@ -738,6 +834,55 @@ export class AgreementService {
 
   // private functions
 
+  // (caseId, majorVersion, minorVersion) is a unique index, so two requests
+  // that read the same latest version both try to write the same number and
+  // the loser used to come back as a 500 -- which is what a double-fired
+  // "generate" after approval looked like. Recompute and retry instead.
+  private async createVersionWithRetry(
+    caseObjId: Types.ObjectId,
+    majorVersion: AgreementStage,
+    firstMinor: number,
+    build: (
+      minorVersion: number,
+      previousVersionId: Types.ObjectId | null,
+    ) => Record<string, any>,
+  ): Promise<AgreementDocument> {
+    const MAX_ATTEMPTS = 5;
+
+    for (let attempt = 1; ; attempt++) {
+      const [latestSameStage, latestOverall] = await Promise.all([
+        this.documentVersion
+          .findOne({ caseId: caseObjId, majorVersion })
+          .sort({ minorVersion: -1 })
+          .exec(),
+        this.documentVersion
+          .findOne({ caseId: caseObjId })
+          .sort({ majorVersion: -1, minorVersion: -1 })
+          .exec(),
+      ]);
+
+      const minorVersion = latestSameStage
+        ? latestSameStage.minorVersion + 1
+        : firstMinor;
+
+      try {
+        const created = await this.documentVersion.create(
+          build(minorVersion, latestOverall?._id ?? null),
+        );
+        // Only once the new version exists, so a failed insert cannot leave
+        // the case with no current version at all.
+        await this.documentVersion.updateMany(
+          { caseId: caseObjId, _id: { $ne: created._id } },
+          { isCurrent: false },
+        );
+        return created;
+      } catch (err: any) {
+        if (err?.code === 11000 && attempt < MAX_ATTEMPTS) continue;
+        throw err;
+      }
+    }
+  }
+
   private async uploadDocxAndPdf(
     buffer: Buffer,
     baseFileName: string,
@@ -826,20 +971,7 @@ export class AgreementService {
   </html>
 `;
 
-    const puppeteerModule: any = await import('puppeteer');
-    const puppeteer = puppeteerModule.default || puppeteerModule;
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-    try {
-      const page = await browser.newPage();
-      await page.setContent(styledHtml, { waitUntil: 'load' });
-      const pdfBytes = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-      });
-      return Buffer.from(pdfBytes);
-    } finally {
-      await browser.close();
-    }
+    return renderHtmlToPdf(styledHtml);
   }
 
   private formatBytes(bytes?: number): string {
@@ -904,8 +1036,9 @@ export class AgreementService {
         break;
 
       case 'lawyer': {
-        const p1LawyerId = (c as any).assignedLawyerP1?.toString();
-        const p2LawyerId = (c as any).assignedLawyerP2?.toString();
+        // Each partner's own choice of solicitor, with the case manager's
+        // older assignment as the fallback (see caseLawyerIds).
+        const { p1: p1LawyerId, p2: p2LawyerId } = caseLawyerIds(c as any);
         const myIds = [actorIdStr, actorUser.lawyerProfile?.toString()].filter(Boolean);
 
         if (p1LawyerId && myIds.includes(p1LawyerId)) {

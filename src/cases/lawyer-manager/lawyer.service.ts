@@ -8,6 +8,7 @@ import {
 
 import { InjectModel } from '@nestjs/mongoose';
 import { AuditLogService } from '../../common/audit-log/audit-log.service';
+import { assignedLawyerFilter } from '../case-access.util';
 import mongoose from 'mongoose';
 
 
@@ -218,8 +219,7 @@ export class LawyerService {
   // =====================================================
 
   /**
-   * Every id that can appear in a case's `assignedLawyerP1`/`assignedLawyerP2`
-   * for this signed-in lawyer.
+   * Every id a case can name this signed-in lawyer by.
    *
    * A case points at the Lawyer *profile* (see case.schema: ref 'Lawyer'), but
    * the caller only ever gives us their *login* (User) id, and the link between
@@ -301,11 +301,6 @@ export class LawyerService {
     return [...ids.values()];
   }
 
-  /**
-   * Mongo filter for "cases this lawyer is assigned to", as P1's or P2's
-   * lawyer. Use it on every lawyer-portal list and count so a lawyer never
-   * sees — or is counted on — a case they have no part in.
-   */
   private async assignedCaseFilter(
     userId: string,
   ): Promise<Record<string, any>> {
@@ -314,21 +309,7 @@ export class LawyerService {
         userId,
       );
 
-    return {
-      $or: [
-        {
-          assignedLawyerP1: {
-            $in: ids,
-          },
-        },
-
-        {
-          assignedLawyerP2: {
-            $in: ids,
-          },
-        },
-      ],
-    };
+    return assignedLawyerFilter(ids);
   }
 
   /**
@@ -2380,20 +2361,22 @@ export class LawyerService {
       status?: string | string[];
     } = {},
   ) {
+
     const assigned =
       await this.assignedCaseFilter(
         userId,
       );
 
-    const criteria: Record<
-      string,
-      any
-    >[] = [assigned];
+      console.log("assigned", assigned)
+
+    const criteria: Record<string, any>[] = [assigned];
 
     const statuses =
       this.parseStatuses(
         options.status,
       );
+
+      console.log("statuses", statuses)
 
     if (statuses.length) {
       criteria.push({
@@ -2429,21 +2412,20 @@ export class LawyerService {
       }
     }
 
-    return this.caseModel
+    console.log("criteria", criteria)
+
+     const findcases = await  this.caseModel
       .find({ $and: criteria })
       .populate('owner')
       .populate('invitedUser')
       .populate('assignedCaseManager')
-      .populate('assignedLawyerP1')
-      .populate('assignedLawyerP2')
       .sort({ updatedAt: -1, createdAt: -1 });
+
+      console.log("findcases",findcases)
+
+      return findcases;
   }
 
-  /**
-   * Accepts a single status, a repeated query param, or a comma-separated list,
-   * and keeps only the values the workflow actually defines — an unknown status
-   * must not silently widen the filter to every case.
-   */
   private parseStatuses(
     status?: string | string[],
   ): string[] {

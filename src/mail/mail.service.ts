@@ -246,25 +246,6 @@ export class MailService implements OnModuleInit {
     }
   }
 
-  async sendInviteCredentials(to: string, password: string, caseId?: string) {
-    const subject = 'Your Lets Prenup Account — Sign-In Details';
-    const text = `You were invited to Lets Prenup.\nEmail: ${to}\nPassword: ${password}\n\nWe recommend changing your password after sign-in.${caseId ? `\n\nCase ID: ${caseId}` : ''}`;
-    const html = buildEmailHtml({
-      eyebrow: 'Welcome to Lets Prenup',
-      heading: 'Your Account Is Ready!',
-      icon: '🔐',
-      body: `Here are your sign-in credentials:<br/><br/>
-             <strong>Email:</strong> ${to}<br/>
-             <strong>Temporary Password:</strong> ${password}<br/>
-             ${caseId ? `<strong>Case ID:</strong> ${caseId}<br/>` : ''}
-             <br/>Please log in and change your password as soon as possible.`,
-      ctaLabel: 'Log In Now',
-      ctaUrl: '#',
-      footerNote: 'For security reasons, please change your password after your first login.',
-    });
-    return this.sendRaw({ to, subject, text, html });
-  }
-
   async sendVerificationOtp(email: string, otp: string, opts?: { expiresAt?: Date }) {
     const expiry = opts?.expiresAt
       ? `This code expires at ${opts.expiresAt.toLocaleString()}.`

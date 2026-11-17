@@ -46,6 +46,7 @@ import {
 import { MailService } from '../mail/mail.service';
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { PartnerInviteService } from './partner-invite.service';
+import { AgreementService } from '../agreement/agreement.service';
 import { generateCaseNumber } from '../utils/case-number.util';
 import { canViewCase } from './case-access.util';
 import { buildCaseStageStatus } from './case-stage-status';
@@ -86,6 +87,7 @@ export class CasesService {
     @InjectModel(CaseAuditLog.name) private auditLogModel: Model<CaseAuditLogDocument>,
     private partnerInvites: PartnerInviteService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly agreementService: AgreementService,
   ) { }
 
   /**
@@ -3091,6 +3093,11 @@ ${taskLines.join('\n\n')}`;
       c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
     }
     await c.save();
+
+    // Carry the couple's approved version into the CM stage, so the manager
+    // opens an existing draft instead of having to generate one. A no-op on
+    // reassignment, and when the couple have not approved a version yet.
+    await this.agreementService.ensureCmStageInitialized(caseId, actorId);
 
     this.recordAudit({
       caseId: c._id,
