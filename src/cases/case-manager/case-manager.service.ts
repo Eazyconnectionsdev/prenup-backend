@@ -422,8 +422,11 @@ export class CaseManagerService {
       .populate('owner')
       .populate('invitedUser')
       .populate('assignedCaseManager')
-      .populate('assignedLawyerP1')
-      .populate('assignedLawyerP2');
+      .populate({ path: 'assignedLawyerP1', populate: { path: 'company', select: 'name website email phone' } })
+      .populate({ path: 'assignedLawyerP2', populate: { path: 'company', select: 'name website email phone' } })
+      // The solicitor each partner chose (the current flow), with their firm.
+      .populate({ path: 'preQuestionnaireUser1.selectedLawyer', populate: { path: 'company', select: 'name website email phone' } })
+      .populate({ path: 'preQuestionnaireUser2.selectedLawyer', populate: { path: 'company', select: 'name website email phone' } });
 
     if (!caseDoc) {
       throw new NotFoundException('Case not found');

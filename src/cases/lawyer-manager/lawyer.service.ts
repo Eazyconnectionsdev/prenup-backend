@@ -9,6 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { AuditLogService } from '../../common/audit-log/audit-log.service';
 import { assignedLawyerFilter } from '../case-access.util';
+import { sideFor, toAssignmentRow } from './lawyer-assignment';
 import mongoose from 'mongoose';
 
 
@@ -1421,8 +1422,11 @@ export class LawyerService {
         .populate('owner')
         .populate('invitedUser')
         .populate('assignedCaseManager')
-        .populate('assignedLawyerP1')
-        .populate('assignedLawyerP2');
+        .populate({ path: 'assignedLawyerP1', populate: { path: 'company', select: 'name website email phone' } })
+        .populate({ path: 'assignedLawyerP2', populate: { path: 'company', select: 'name website email phone' } })
+        // The solicitor each partner chose (the current flow), with their firm.
+        .populate({ path: 'preQuestionnaireUser1.selectedLawyer', populate: { path: 'company', select: 'name website email phone' } })
+        .populate({ path: 'preQuestionnaireUser2.selectedLawyer', populate: { path: 'company', select: 'name website email phone' } });
 
     if (!caseDoc) {
       throw new NotFoundException(
@@ -2501,6 +2505,69 @@ export class LawyerService {
         completedAt: -1,
         updatedAt: -1,
       });
+  }
+
+  /**
+   * The lawyer's own assignments, one row per case with the side they act
+   * for and that side's stage. `active`: every assigned case not archived
+   * (dashboard + Active Cases). `archived`: completed and archived cases
+   * (Archived Cases; completed ones show as "Recently Completed").
+   */
+  async assignments(
+    userId: string,
+    scope: 'active' | 'archived' = 'active',
+  ) {
+    const ids = await this.resolveLawyerIds(userId);
+    const mine = new Set(ids.map(String));
+    const workflowStatus =
+      scope === 'archived'
+        ? { $in: [CaseWorkflowStatus.COMPLETED, CaseWorkflowStatus.ARCHIVED] }
+        : { $nin: [CaseWorkflowStatus.CANCELLED, CaseWorkflowStatus.ARCHIVED] };
+
+    const cases = await this.caseModel
+      .find({
+        $and: [
+          {
+            // The solicitor each partner chose, or (older cases) the one a
+            // case manager assigned; sideFor() below settles which applies.
+            $or: [
+              ...assignedLawyerFilter(ids).$or,
+              { assignedLawyerP1: { $in: ids } },
+              { assignedLawyerP2: { $in: ids } },
+            ],
+          },
+          { workflowStatus },
+        ],
+      })
+      .populate('owner', 'firstName middleName lastName email')
+      .populate('invitedUser', 'firstName middleName lastName email')
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean()
+      .exec();
+
+    return cases
+      .map((c: any) => {
+        const side = sideFor(c, mine);
+        return side ? toAssignmentRow(c, side) : null;
+      })
+      .filter(Boolean);
+  }
+
+  /** The signed-in lawyer's own profile (Profile page). */
+  async myProfile(userId: string) {
+    const ids = await this.resolveLawyerIds(userId);
+    const lawyer: any = await this.lawyerModel
+      .findOne({ _id: { $in: ids } })
+      .populate('company', 'name website email phone address city postcode country')
+      .lean()
+      .exec();
+    if (!lawyer) throw new NotFoundException('Lawyer profile not found');
+    const user: any = await this.userModel
+      .findById(userId)
+      .select('firstName middleName lastName email phone createdAt lastLoginAt')
+      .lean()
+      .exec();
+    return { lawyer, user };
   }
 
   // =====================================================

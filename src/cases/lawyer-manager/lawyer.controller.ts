@@ -332,6 +332,34 @@ export class LawyerController {
   }
 
   // =====================================================
+  // MY ASSIGNMENTS (dashboard, Active Cases, Archived Cases)
+  // =====================================================
+
+  @Get('assignments')
+  async assignments(
+    @Req() req,
+    @Query('scope') scope?: string,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.assignments(
+      user.id,
+      scope === 'archived' ? 'archived' : 'active',
+    );
+  }
+
+  @Get('me/profile')
+  async myProfile(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+
+    return this.lawyerService.myProfile(
+      user.id,
+    );
+  }
+
+  // =====================================================
   // CASE
   // =====================================================
 
