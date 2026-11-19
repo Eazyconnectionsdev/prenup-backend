@@ -52,6 +52,7 @@ import { MailModule } from '../../mail/mail.module';
 import { AgreementModule } from '../../agreement/agreement.module';
 import { CaseManagerController } from './case-manager.controller';
 import { CaseManagerService } from './case-manager.service';
+import { CaseAutoArchiveService } from './case-auto-archive.service';
 
 @Module({
   imports: [
@@ -111,10 +112,12 @@ import { CaseManagerService } from './case-manager.service';
 
   providers: [
     CaseManagerService,
+    CaseAutoArchiveService,
   ],
 
   exports: [
     CaseManagerService,
+    CaseAutoArchiveService,
   ],
 })
 export class CaseManagerModule {}

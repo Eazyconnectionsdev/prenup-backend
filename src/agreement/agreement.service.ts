@@ -7,7 +7,9 @@ import { Model, Types } from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { S3Service } from 'src/common/s3.service';
 import { Case, CaseDocument } from '../cases/schemas/case.schema';
-import { caseLawyerIds } from '../cases/case-access.util';
+import { caseLawyerIds, lawyerIdsForUser } from '../cases/case-access.util';
+import { Lawyer } from '../cases/schemas/lawyer.schema';
+import { assertCmMayAct } from '../cases/case-manager/cm-action.guard';
 import {
   AgreementVersion,
   AgreementDocument,
@@ -91,6 +93,8 @@ export class AgreementService {
     private caseModel: Model<CaseDocument>,
     @InjectModel(AgreementLock.name)
     private lockModel: Model<AgreementLockDocument>,
+    @InjectModel(Lawyer.name)
+    private lawyerModel: Model<any>,
     private s3Service: S3Service,
     private eventEmitter: EventEmitter2,
   ) { }
@@ -198,7 +202,13 @@ export class AgreementService {
     actorId: string,
   ): Promise<VersionResult> {
 
-    const { c, actorObjId } = await this.validateCaseAndActor(caseId, actorId, ['CASE_MANAGER']);
+    const { c, actorObjId, role } = await this.validateCaseAndActor(caseId, actorId, ['CASE_MANAGER']);
+
+    // The case manager drafts only while the case is with them for review
+    // (after the couple have handed it over, before approval).
+    if (role === 'CASE_MANAGER') {
+      assertCmMayAct(c, { id: actorId, role: 'case_manager' }, 'review');
+    }
 
     const buffer = await buildAgreementDocxBuffer({
       caseId: c._id.toString(),
@@ -1039,11 +1049,16 @@ export class AgreementService {
         // Each partner's own choice of solicitor, with the case manager's
         // older assignment as the fallback (see caseLawyerIds).
         const { p1: p1LawyerId, p2: p2LawyerId } = caseLawyerIds(c as any);
-        const myIds = [actorIdStr, actorUser.lawyerProfile?.toString()].filter(Boolean);
+        // Every id the lawyer goes by, not only User.lawyerProfile: the link
+        // may be recorded on the Lawyer profile instead.
+        const myIds = await lawyerIdsForUser(
+          { user: this.userModel, lawyer: this.lawyerModel },
+          actorIdStr,
+        );
 
-        if (p1LawyerId && myIds.includes(p1LawyerId)) {
+        if (p1LawyerId && myIds.has(p1LawyerId)) {
           matchedRole = 'LAWYER_P1';
-        } else if (p2LawyerId && myIds.includes(p2LawyerId)) {
+        } else if (p2LawyerId && myIds.has(p2LawyerId)) {
           matchedRole = 'LAWYER_P2';
         }
         break;

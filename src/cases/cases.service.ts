@@ -7,6 +7,7 @@ import {
   ForbiddenException,
   OnModuleInit,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import crypto from 'crypto';
@@ -48,7 +49,7 @@ import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { PartnerInviteService } from './partner-invite.service';
 import { AgreementService } from '../agreement/agreement.service';
 import { generateCaseNumber } from '../utils/case-number.util';
-import { canViewCase } from './case-access.util';
+import { canViewCase, caseLawyerIds } from './case-access.util';
 import { buildCaseStageStatus } from './case-stage-status';
 import {
   PAYMENT_CURRENCY,
@@ -1408,9 +1409,18 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     const inviteUrl = existingAccount
       ? `${baseUrl}/accept-invite?${new URLSearchParams({ caseId: c._id.toString(), token }).toString()}`
       : `${baseUrl}/register-partner?${params.toString()}`;
-    await this.mailService.sendInvite(dto.email, inviteUrl, {
-      existingAccount: !!existingAccount,
-    });
+    try {
+      await this.mailService.sendInvite(dto.email, inviteUrl, {
+        existingAccount: !!existingAccount,
+      });
+    } catch (err) {
+      // The invitation itself is saved; say so instead of a bare 500, so the
+      // applicant knows to send it again.
+      console.error(`Invite email to ${dto.email} for case ${c.caseNumber ?? c._id} failed`, err);
+      throw new ServiceUnavailableException(
+        'The invitation was saved, but the email could not be sent. Please try sending it again.',
+      );
+    }
 
     this.recordAudit({
       caseId: c._id,
@@ -2175,7 +2185,7 @@ async rejectCaseByUser(
   /**
    * The independent-legal-advice stage opens only once both partners have
    * confirmed the agreement and the case manager has approved it — the same
-   * moment `approveCaseByManager` moves the case to LAWYERS_ASSIGNED.
+   * moment the case manager approves it (status CM_APPROVED).
    */
   private assertPreLawyerStageOpen(c: CaseDocument) {
     const a: any = c.approval ?? {};
@@ -2376,9 +2386,11 @@ ${taskLines.join('\n\n')}`;
     const p2Submitted = !!(
       c.preQuestionnaireUser2 && c.preQuestionnaireUser2.submitted
     );
-    // Bug 5 fix: when both partners finish the pre-questionnaire the case
-    // was already in LAWYERS_ASSIGNED; advance it to PRE_LAWYER_COMPLETED.
-    if (p1Submitted && p2Submitted) {
+    // The pre-lawyer stage is complete only when both partners have submitted
+    // the questionnaire AND each has chosen a solicitor; until then the case
+    // stays where it is (Lawyer Assignment Pending on the CM dashboard).
+    // Choosing the last solicitor completes it too (selectLawyerForCase).
+    if (p1Submitted && p2Submitted && this.bothSolicitorsChosen(c)) {
       c.workflowStatus = CaseWorkflowStatus.PRE_LAWYER_COMPLETED;
       await c.save();
 
@@ -2425,6 +2437,12 @@ ${taskLines.join('\n\n')}`;
    * advice. Each party must instruct their own solicitor, so the two slots
    * cannot hold the same lawyer.
    */
+  /** Has each partner chosen their own solicitor (or had one assigned)? */
+  private bothSolicitorsChosen(c: any): boolean {
+    const { p1, p2 } = caseLawyerIds(c);
+    return Boolean(p1 && p2);
+  }
+
   async selectLawyerForCase(
     caseId: string,
     actorId: string,
@@ -2476,7 +2494,33 @@ ${taskLines.join('\n\n')}`;
     entry.selectedAt = new Date();
     c.markModified(slot);
 
+    // Last piece of the pre-lawyer stage: both questionnaires were already in.
+    const advanced =
+      Boolean(c.preQuestionnaireUser1?.submitted && c.preQuestionnaireUser2?.submitted) &&
+      this.bothSolicitorsChosen(c) &&
+      c.workflowStatus !== CaseWorkflowStatus.PRE_LAWYER_COMPLETED;
+    if (advanced) c.workflowStatus = CaseWorkflowStatus.PRE_LAWYER_COMPLETED;
+
     await c.save();
+
+    // Same notice the questionnaire submit sends when it completes the stage.
+    if (advanced) {
+      try {
+        if (typeof (this.mailService as any).sendFirstPhaseCompletedForCase === 'function') {
+          const populated = await this.caseModel
+            .findById(c._id)
+            .populate('owner invitedUser')
+            .lean()
+            .exec();
+          await (this.mailService as any).sendFirstPhaseCompletedForCase(populated);
+        }
+      } catch (err) {
+        console.error(
+          `Failed to send first-phase completed email for case ${c.caseNumber ?? c._id}`,
+          err,
+        );
+      }
+    }
 
     this.recordAudit({
       caseId: c._id,
@@ -3005,7 +3049,9 @@ ${taskLines.join('\n\n')}`;
       approval.user2Approved &&
       approval.caseManagerApproved
     ) {
-      c.workflowStatus = CaseWorkflowStatus.LAWYERS_ASSIGNED;
+      // Same status the case manager portal sets (CaseManagerService.approveCase);
+      // no lawyer is chosen yet at this point, so not LAWYERS_ASSIGNED.
+      c.workflowStatus = CaseWorkflowStatus.CM_APPROVED;
       c.fullyLocked = true;
       await c.save();
 
@@ -3089,9 +3135,10 @@ ${taskLines.join('\n\n')}`;
 
     (c as any).assignedCaseManager = new Types.ObjectId(managerId);
 
-    if (!c.workflowStatus || c.workflowStatus === CaseWorkflowStatus.DRAFT) {
-      c.workflowStatus = CaseWorkflowStatus.COUPLE_SUBMITTED;
-    }
+    // Assigning a case manager never moves the case on. A case reaches the
+    // case manager (COUPLE_SUBMITTED) only when both partners have completed
+    // their information and approved the final review (approveCaseByUser);
+    // until then the manager can be assigned but cannot act on it.
     await c.save();
 
     // Carry the couple's approved version into the CM stage, so the manager

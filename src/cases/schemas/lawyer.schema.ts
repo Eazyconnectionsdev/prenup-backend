@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 
 import { Company } from './company.schema';
 import { StoredFile, StoredFileSchema } from '../../common/schemas/stored-file.schema';
@@ -185,8 +185,11 @@ export class Lawyer {
    * Lawyer:
    *   user = 123
    */
+  // MongooseSchema.Types.ObjectId, not Types.ObjectId: the latter makes the
+  // path Mixed, so a lookup by a string user id never matches and the lawyer
+  // is treated as not assigned (403 on their own case).
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'User',
     unique: true,
     sparse: true,
@@ -194,7 +197,7 @@ export class Lawyer {
   })
   user?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   userId?: Types.ObjectId | null;
 
   /** Whether a welcome email has gone out. "Accepted" is derived from the user's first login. */

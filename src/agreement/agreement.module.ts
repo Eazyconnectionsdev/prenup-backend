@@ -4,6 +4,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { Case, CaseSchema } from '../cases/schemas/case.schema';
+import { Lawyer, LawyerSchema } from '../cases/schemas/lawyer.schema';
 import { AgreementController } from './agreement.controller';
 import { AgreementService } from './agreement.service';
 import {
@@ -24,6 +25,7 @@ import { User, UserSchema } from 'src/users/schemas/user.schema';
       { name: AgreementVersion.name, schema: AgreementVersionSchema },
       { name: AgreementLock.name, schema: AgreementLockSchema },
       { name: Case.name, schema: CaseSchema },
+      { name: Lawyer.name, schema: LawyerSchema },
     ]),
     S3Module,
   ],
