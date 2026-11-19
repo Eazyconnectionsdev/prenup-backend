@@ -1,4 +1,4 @@
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 
 export const STAFF_ROLES = ['superadmin', 'admin', 'case_manager'];
 
@@ -65,8 +65,11 @@ export async function isAssignedLawyer(
   const mine = new Set<string>([uid]);
   const user: any = await models.user.findById(uid).select('lawyerProfile').lean().exec();
   if (user?.lawyerProfile) mine.add(String(user.lawyerProfile));
+  // Lawyer.user / userId are untyped (Mixed) in the schema, so Mongoose does
+  // not cast a string id: match the stored ObjectId and a legacy string.
+  const uidRefs: any[] = Types.ObjectId.isValid(uid) ? [new Types.ObjectId(uid), uid] : [uid];
   const profiles: any[] = await models.lawyer
-    .find({ $or: [{ user: uid }, { userId: uid }] })
+    .find({ $or: [{ user: { $in: uidRefs } }, { userId: { $in: uidRefs } }] })
     .select('_id')
     .lean()
     .exec();
