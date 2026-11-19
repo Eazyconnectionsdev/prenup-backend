@@ -1,3 +1,4 @@
+import { CmAction, CmActionGuard } from './cm-action.guard';
 // src/case-manager/case-manager.controller.ts
 
 import {
@@ -126,6 +127,8 @@ export class CaseManagerController {
   // =====================================================
 
   @Post(':caseId/return-draft')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   async returnToDraft(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -141,6 +144,8 @@ export class CaseManagerController {
   }
 
   @Post(':caseId/approve')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   async approveCase(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -160,6 +165,8 @@ export class CaseManagerController {
   // =====================================================
 
   @Post(':caseId/request-couple-approval')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   async requestCoupleApproval(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -173,6 +180,8 @@ export class CaseManagerController {
   }
 
   @Post(':caseId/p1-confirmation')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -191,6 +200,8 @@ export class CaseManagerController {
   }
 
   @Post(':caseId/p2-confirmation')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -231,6 +242,8 @@ export class CaseManagerController {
   }
 
   @Post(':caseId/assign-lawyers')
+  @UseGuards(CmActionGuard)
+  @CmAction('pre-lawyer')
   async assignLawyers(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -250,6 +263,8 @@ export class CaseManagerController {
   // =====================================================
 
   @Post(':caseId/documents')
+  @UseGuards(CmActionGuard)
+  @CmAction('casework')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -277,6 +292,8 @@ export class CaseManagerController {
   }
 
   @Delete(':caseId/documents/:documentId')
+  @UseGuards(CmActionGuard)
+  @CmAction('casework')
   async deleteDocument(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -296,6 +313,8 @@ export class CaseManagerController {
   // =====================================================
 
   @Post(':caseId/notes')
+  @UseGuards(CmActionGuard)
+  @CmAction('casework')
   async addNote(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -320,6 +339,8 @@ export class CaseManagerController {
   }
 
   @Delete(':caseId/notes/:noteId')
+  @UseGuards(CmActionGuard)
+  @CmAction('casework')
   async deleteNote(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -339,6 +360,8 @@ export class CaseManagerController {
   // =====================================================
 
   @Post(':caseId/versions')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   async createVersion(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -405,6 +428,8 @@ export class CaseManagerController {
   }
 
   @Post(':caseId/agreements')
+  @UseGuards(CmActionGuard)
+  @CmAction('review')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -454,6 +479,8 @@ export class CaseManagerController {
   }
 
   @Post(':caseId/archive')
+  @UseGuards(CmActionGuard)
+  @CmAction('archive')
   async archiveCase(
     @Req() req,
     @Param('caseId') caseId: string,

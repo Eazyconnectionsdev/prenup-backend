@@ -24,6 +24,7 @@ import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 
 import { LawyerService } from './lawyer.service';
 import { LawyerCaseGuard } from './lawyer-case.guard';
+import { LawyerAction, LawyerActionGuard } from './lawyer-action.guard';
 
 import { CreateNoteDto } from '../case-manager/dto/create-note.dto';
 import { CreateVersionDto } from '../case-manager/dto/create-version.dto';
@@ -386,6 +387,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/review-complete')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('review')
   async reviewComplete(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -395,6 +398,7 @@ export class LawyerController {
     return this.lawyerService.reviewComplete(
       caseId,
       user.id,
+      req.lawyerSides,
     );
   }
 
@@ -403,6 +407,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/request-ila')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('request-ila')
   async requestILA(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -416,6 +422,8 @@ export class LawyerController {
   }
 
   @Post(':caseId/p1-ila')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('p1-ila')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -434,6 +442,8 @@ export class LawyerController {
   }
 
   @Post(':caseId/p2-ila')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('p2-ila')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -465,6 +475,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/p1-signoff')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('p1-signoff')
   async p1Signoff(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -478,6 +490,8 @@ export class LawyerController {
   }
 
   @Post(':caseId/p2-signoff')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('p2-signoff')
   async p2Signoff(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -495,6 +509,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/p1-confirmation')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('p1-confirmation')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -513,6 +529,8 @@ export class LawyerController {
   }
 
   @Post(':caseId/p2-confirmation')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('p2-confirmation')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -544,6 +562,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/complete')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('complete')
   async completeCase(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -561,6 +581,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/documents')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('casework')
   @UseInterceptors(
     FileInterceptor('file'),
   )
@@ -588,6 +610,8 @@ export class LawyerController {
   }
 
   @Delete(':caseId/documents/:documentId')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('casework')
   async deleteDocument(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -607,6 +631,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/notes')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('casework')
   async addNote(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -631,6 +657,8 @@ export class LawyerController {
   }
 
   @Delete(':caseId/notes/:noteId')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('casework')
   async deleteNote(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -650,6 +678,8 @@ export class LawyerController {
   // =====================================================
 
   @Post(':caseId/versions')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('casework')
   async createVersion(
     @Req() req,
     @Param('caseId') caseId: string,
@@ -718,6 +748,8 @@ export class LawyerController {
   }
 
   @Post(':caseId/agreements')
+  @UseGuards(LawyerActionGuard)
+  @LawyerAction('casework')
   @UseInterceptors(
     FileInterceptor('file'),
   )

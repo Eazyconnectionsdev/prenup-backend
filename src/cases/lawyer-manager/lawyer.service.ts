@@ -1470,9 +1470,15 @@ export class LawyerService {
   // REVIEW COMPLETE
   // =====================================================
 
+  /**
+   * A lawyer finishes their review of their own partner's side. The review is
+   * complete once both lawyers have finished (p1/p2LawyerApproved). Staff
+   * (`sides` null) complete it for both, as this endpoint always did.
+   */
   async reviewComplete(
     caseId: string,
     userId: string,
+    sides?: ('P1' | 'P2')[] | null,
   ) {
     const caseDoc =
       await this.caseModel
@@ -1484,14 +1490,31 @@ export class LawyerService {
       );
     }
 
-    caseDoc.workflowStatus =
-      CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED;
+    const now = new Date();
+    const mine = sides && sides.length ? sides : ['P1', 'P2'];
+    if (mine.includes('P1') && !caseDoc.p1LawyerApproved) {
+      caseDoc.p1LawyerApproved = true;
+      caseDoc.p1LawyerApprovedAt = now;
+    }
+    if (mine.includes('P2') && !caseDoc.p2LawyerApproved) {
+      caseDoc.p2LawyerApproved = true;
+      caseDoc.p2LawyerApprovedAt = now;
+    }
 
-    caseDoc.lawyerReviewCompleted =
-      true;
+    if (caseDoc.p1LawyerApproved && caseDoc.p2LawyerApproved) {
+      caseDoc.workflowStatus =
+        CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED;
 
-    caseDoc.lawyerReviewCompletedAt =
-      new Date();
+      caseDoc.lawyerReviewCompleted =
+        true;
+
+      caseDoc.lawyerReviewCompletedAt =
+        now;
+    } else {
+      // One lawyer has finished; the case is in review until the other does.
+      caseDoc.workflowStatus =
+        CaseWorkflowStatus.LAWYER_REVIEW;
+    }
 
     await caseDoc.save();
 
@@ -1671,6 +1694,18 @@ export class LawyerService {
 
     c.p1LawyerSignedAt =
       new Date();
+
+    // Whichever lawyer signs last completes the sign-off (p2Signoff does the
+    // same); before, only a P2 sign-off could move the case on.
+    if (
+      c.p1LawyerSigned &&
+      c.p2LawyerSigned
+    ) {
+      c.dualLawyerSignoffCompleted = true;
+      c.dualLawyerSignoffCompletedAt = new Date();
+      c.workflowStatus =
+        CaseWorkflowStatus.LAWYER_CLIENT_CONFIRMATION;
+    }
 
     await c.save();
 

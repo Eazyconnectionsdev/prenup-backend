@@ -28,6 +28,7 @@ import { ResolvePartnerConflictDto } from './dto/resolve-partner-conflict.dto';
 
 import { InvitePartnerDto } from '../cases/dto/Invite-partner.dto';
 import { CompleteOnboardingDto } from './dto/complete-onboarding.dto';
+import { assertCmMayAct } from './case-manager/cm-action.guard';
 import { PayCaseDto } from './dto/pay-case.dto';
 import { MatrimonialAgreementDto } from './dto/matrimonial-agreement.dto';
 
@@ -62,6 +63,18 @@ export class CasesController {
     }
 
     return user;
+  }
+
+  /**
+   * A case manager edits the couple's forms (and backs them up / reverts them)
+   * only while the case is with them for review: not before the couple have
+   * handed it over. Admins can still correct a case at any time.
+   */
+  private async assertCaseManagerMayEdit(caseId: string, user: any) {
+    if (user?.role !== 'case_manager') return;
+    const c = await this.casesService.findById(caseId);
+    if (!c) return;
+    assertCmMayAct(c, user, 'review');
   }
 
   private isPrivilegedRole(role?: string) {
@@ -402,6 +415,7 @@ export class CasesController {
     @Body() body: MatrimonialAgreementDto,
   ) {
     const user = this.ensureUser(req);
+    await this.assertCaseManagerMayEdit(id, user);
 
     return this.casesService.updateQuestionnaireStep(
       id,
@@ -430,6 +444,7 @@ export class CasesController {
       this.ensureUser(req);
 
     const isPrivileged = this.isPrivilegedRole(user.role);
+    await this.assertCaseManagerMayEdit(id, user);
 
     return this.casesService.updateQuestionnaireStep(
       id,
@@ -831,6 +846,8 @@ export class CasesController {
       );
     }
 
+    await this.assertCaseManagerMayEdit(id, user);
+
     return this.casesService.createQuestionnaireBackup(
       id,
       user.id,
@@ -861,6 +878,8 @@ export class CasesController {
         'Only case managers may revert questionnaires',
       );
     }
+
+    await this.assertCaseManagerMayEdit(id, user);
 
     return this.casesService.revertQuestionnaire(
       id,

@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -20,8 +21,12 @@ export class InvitePartnerDto {
   @IsValidPhone()
   mobileNumber?: string;
 
+  // Same values the Case schema allows (partnerInviteDetails.relationshipStatus);
+  // anything else used to reach the save and fail there as a 500.
   @IsOptional()
-  @IsString()
+  @IsIn(['Fiancé', 'Fiancée', 'Partner', '', null], {
+    message: 'relationshipStatus must be Fiancé, Fiancée or Partner',
+  })
   relationshipStatus?: string;
 
   @IsOptional()

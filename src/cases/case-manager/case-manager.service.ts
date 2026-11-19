@@ -527,6 +527,19 @@ export class CaseManagerService {
       );
     }
 
+    // The route guard (CmActionGuard 'review') has already checked the case is
+    // with this case manager. Approval also hands the solicitors the case
+    // manager's agreement draft, so there must be one: carry the couple's
+    // approved version over if the manager has not generated their own.
+    await this.agreementService.ensureCmStageInitialized(caseId, userId);
+    const { canInitialize } =
+      await this.agreementService.getLawyerStageReadiness(caseId);
+    if (!canInitialize) {
+      throw new BadRequestException(
+        "Generate the case manager's agreement draft before approving the case.",
+      );
+    }
+
     const now = new Date();
     const actorId = Types.ObjectId.isValid(userId)
       ? new Types.ObjectId(userId)
@@ -678,14 +691,9 @@ export class CaseManagerService {
     c.p2ConfirmedAt =
       new Date();
 
-    if (
-      c.p1Confirmed &&
-      c.p2Confirmed
-    ) {
-      c.workflowStatus =
-        CaseWorkflowStatus.LAWYER_REVIEW_COMPLETED;
-    }
-
+    // Uploaded by the case manager during their review: it records the
+    // partner's confirmation only and does not move the case on (it used to
+    // jump straight to LAWYER_REVIEW_COMPLETED, before any lawyer was chosen).
     await c.save();
 
     this.recordAudit({
