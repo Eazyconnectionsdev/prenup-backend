@@ -805,6 +805,20 @@ export class Case {
   })
   paidAt?: Date | null;
 
+  // When Partner 1 and Partner 2 were fixed: at the first successful payment
+  // (the payer is P1), never changed afterwards. See case-roles.ts.
+  @Prop({ type: Date, default: null })
+  rolesEstablishedAt?: Date | null;
+
+  // 'payment' (the payer became P1) or 'staff' (marked paid by staff).
+  @Prop({ type: String, default: null })
+  rolesEstablishedBy?: string | null;
+
+  // An initial payment in progress ({ by, at }), so a second attempt for the
+  // same case cannot also go through. Cleared when the payment ends.
+  @Prop({ type: Object, default: null })
+  paymentClaim?: { by: Types.ObjectId; at: Date } | null;
+
   @Prop({
     type: String,
     enum: AGREEMENT_TYPES,

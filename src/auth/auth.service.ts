@@ -74,6 +74,8 @@ export class AuthService {
       lastName,
       // Never trust client-supplied role / endUserType on public signup.
       role: 'end_user',
+      // Provisional label for the screens only. Registering does not make
+      // anyone Partner 1: the first successful payment does (case-roles.ts).
       endUserType: 'user1',
       phone: phone?.trim(),
       marketingConsent: !!marketingConsent,
@@ -458,6 +460,7 @@ export class AuthService {
           lastName,
           phone: profile.phone?.trim() || partner.mobileNumber || null,
           role: 'end_user',
+          // Provisional until the case is paid; whoever pays is Partner 1.
           endUserType: 'user2',
           invitedBy: caseDoc.owner,
           inviteCaseId: caseDoc._id,

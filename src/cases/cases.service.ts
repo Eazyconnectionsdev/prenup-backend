@@ -50,6 +50,14 @@ import { PartnerInviteService } from './partner-invite.service';
 import { AgreementService } from '../agreement/agreement.service';
 import { generateCaseNumber } from '../utils/case-number.util';
 import { canViewCase, caseLawyerIds } from './case-access.util';
+import {
+  assertNoOtherPaidCase,
+  claimInitialPayment,
+  establishCaseRoles,
+  otherPersonOf,
+  releasePaymentClaim,
+  setAsideDuplicateDrafts,
+} from './case-roles';
 import { buildCaseStageStatus } from './case-stage-status';
 import {
   PAYMENT_CURRENCY,
@@ -943,6 +951,11 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
 
     const price = priceFor(agreementType)!;
 
+    // Only one initial payment per couple: claim the case and both people
+    // before anything is charged (a second attempt gets a 409 instead).
+    const roleModels = { caseModel: this.caseModel, userModel: this.userModel };
+    await claimInitialPayment(roleModels, String(c._id), String(userId));
+
     const digits = dto.cardNumber.replace(/\D/g, '');
     const last4 = digits.slice(-4);
     const brand = this.cardBrand(digits);
@@ -977,7 +990,32 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       paidBy: new Types.ObjectId(userId),
     } as any;
 
-    await c.save();
+    // The payer is Partner 1 from now on (case-roles.ts).
+    let swapped = false;
+    try {
+      ({ swapped } = await establishCaseRoles(roleModels, c, String(userId)));
+      await c.save();
+    } catch (err) {
+      await releasePaymentClaim(roleModels, String(c._id));
+      throw err;
+    }
+    await releasePaymentClaim(roleModels, String(c._id));
+    const setAside = await setAsideDuplicateDrafts(roleModels, c);
+    if (swapped || setAside) {
+      this.recordAudit({
+        caseId: c._id,
+        userId,
+        action: AuditAction.UPDATED,
+        module: AuditModuleName.PAYMENT,
+        stage: 'Registration and payment',
+        notes: [
+          swapped ? 'The invited partner paid, so they are Partner 1 on this case' : '',
+          setAside ? `${setAside} duplicate unpaid draft(s) for this couple set aside` : '',
+        ]
+          .filter(Boolean)
+          .join('; '),
+      });
+    }
 
     // The dashboard and the profile read this flag off the user, so the payer
     // is marked as having paid as well.
@@ -1084,13 +1122,23 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       throw new NotFoundException('Case not found');
     }
 
+    // Staff marking a case paid: nobody in the couple paid, so the
+    // provisional owner becomes Partner 1 (case-roles.ts).
+    const roleModels = { caseModel: this.caseModel, userModel: this.userModel };
+    if (!c.paymentCompleted) {
+      const other = await otherPersonOf(roleModels, c, String(c.owner));
+      await assertNoOtherPaidCase(roleModels, String(c._id), [String(c.owner), other ?? '']);
+    }
+
     const previousStatus = c.paymentStatus;
     c.paymentCompleted = true;
     c.paymentStatus = PaymentStatus.COMPLETED;
 
     c.workflowStatus = CaseWorkflowStatus.DRAFT;
 
+    await establishCaseRoles(roleModels, c, null);
     await c.save();
+    await setAsideDuplicateDrafts(roleModels, c);
 
     this.recordAudit({
       caseId: c._id,
@@ -1213,13 +1261,16 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     }
     const c = await this.caseModel.findById(caseId).lean().exec();
     if (!c) throw new NotFoundException('Case not found');
-    if (c.owner?.toString() !== userId.toString()) {
+    // Both partners may read it (either can choose the service before payment).
+    if (c.owner?.toString() !== userId.toString() && c.invitedUser?.toString() !== userId.toString()) {
       throw new ForbiddenException('Forbidden');
     }
     return {
       completed: !!c.onboarding?.completed,
       agreementType: c.agreementType ?? null,
       completedAt: c.onboarding?.completedAt ?? null,
+      // Either partner may pay until the case is paid for.
+      paid: !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED,
     };
   }
 
@@ -1233,8 +1284,13 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     }
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
-    if (c.owner?.toString() !== userId.toString()) {
-      throw new ForbiddenException('Only the case owner can complete onboarding');
+    // Before payment either partner may choose the service (whoever pays
+    // becomes Partner 1); once paid, only Partner 1 can change it.
+    const isOwner = c.owner?.toString() === userId.toString();
+    const isPartner = c.invitedUser?.toString() === userId.toString();
+    const paid = !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED;
+    if (!isOwner && !(isPartner && !paid)) {
+      throw new ForbiddenException('Only Partner 1 can change the service once the case is paid for');
     }
 
     const prev = c.onboarding;

@@ -104,6 +104,11 @@ export class User {
   @Prop({ type: Boolean, default: false })
   paymentDone?: boolean;
 
+  // Set while an initial payment for this person's couple is in progress
+  // ({ caseId, at }), so a second case cannot be paid for at the same time.
+  @Prop({ type: Object, default: null })
+  paymentLock?: { caseId: Types.ObjectId; at: Date } | null;
+
   @Prop({
     type: String,
     default: 'England',

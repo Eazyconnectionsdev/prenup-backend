@@ -12,6 +12,14 @@ import Stripe from 'stripe';
 import { RequestContext, userDisplayName } from '../common/request-context';
 import { Case, CaseDocument, CaseWorkflowStatus, PaymentStatus } from '../cases/schemas/case.schema';
 import { User } from '../users/schemas/user.schema';
+import {
+  assertNoOtherPaidCase,
+  claimInitialPayment,
+  establishCaseRoles,
+  otherPersonOf,
+  releasePaymentClaim,
+  setAsideDuplicateDrafts,
+} from '../cases/case-roles';
 import { getNextSeq } from '../utils/case-number.util';
 import { AGREEMENT_TYPE_LABELS, SERVICE_GROUP_LABELS, serviceGroupOf } from '../tracking/labels';
 import {
@@ -132,6 +140,57 @@ export class PaymentsService {
     const stripe = this.stripe();
     const q = this.quote(c.agreementType);
     const payer: any = await this.userModel.findById(user.id ?? user._id).lean();
+
+    // Only one initial payment per couple: hold the case and both people for
+    // the life of the checkout, so the partner cannot open a second one. The
+    // same payer reopening checkout gets the session already open back,
+    // never a second one that could also be paid.
+    const payerId = String(user.id ?? user._id);
+    try {
+      await claimInitialPayment(this.roleModels, String(c._id), payerId);
+    } catch (err) {
+      const open = await this.openSessionOf(c, payerId, stripe);
+      if (open) return open;
+      throw err;
+    }
+    try {
+      return await this.openCheckout(c, payer, q, stripe);
+    } catch (err) {
+      await releasePaymentClaim(this.roleModels, String(c._id));
+      throw err;
+    }
+  }
+
+  /** The payer's own checkout for this case that is still open, if any. */
+  private async openSessionOf(c: any, payerId: string, stripe: any) {
+    const fresh: any = await this.caseModel.findById(c._id).select('paymentClaim').lean();
+    if (String(fresh?.paymentClaim?.by ?? '') !== payerId) return null;
+    const tx: any = await this.txModel
+      .findOne({
+        caseId: c._id,
+        type: TransactionType.PAYMENT,
+        status: TransactionStatus.INITIATED,
+        createdBy: new Types.ObjectId(payerId),
+      })
+      .sort({ initiatedAt: -1 })
+      .lean();
+    if (!tx?.providerSessionId) return null;
+    try {
+      const session = await stripe.checkout.sessions.retrieve(tx.providerSessionId);
+      if (session?.status === 'open' && session.url) {
+        return { url: session.url, sessionId: session.id, transactionId: tx.transactionId };
+      }
+    } catch (e) {
+      this.logger.warn(`Could not reopen checkout ${tx.providerSessionId}: ${(e as Error).message}`);
+    }
+    return null;
+  }
+
+  private get roleModels() {
+    return { caseModel: this.caseModel as any, userModel: this.userModel as any };
+  }
+
+  private async openCheckout(c: any, payer: any, q: any, stripe: any) {
     const transactionId = await this.nextId('TXN');
     const front = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
 
@@ -333,19 +392,32 @@ export class PaymentsService {
     tx.failureCode = null;
     await tx.save();
 
-    await this.markCasePaid(c, `Payment confirmed by Stripe (${tx.transactionId})`);
+    await this.markCasePaid(
+      c,
+      `Payment confirmed by Stripe (${tx.transactionId})`,
+      String(tx.createdBy ?? tx.customerId ?? session.metadata?.userId ?? '') || null,
+    );
     return tx;
   }
 
-  private async markCasePaid(c: CaseDocument, reason: string) {
+  private async markCasePaid(c: CaseDocument, reason: string, payerId: string | null = null) {
+    if (this.isPaid(c)) {
+      // Should not happen (the claim stops a second checkout), but never let a
+      // second payment change who Partner 1 is.
+      this.logger.warn(`Case ${c.caseNumber ?? c._id} was already paid; second payment needs a refund (${reason})`);
+    }
     await this.asSystem(reason, async () => {
       c.paymentCompleted = true;
       c.paymentStatus = PaymentStatus.COMPLETED;
       if (!c.workflowStatus || c.workflowStatus === CaseWorkflowStatus.NOT_PAID) {
         c.workflowStatus = CaseWorkflowStatus.DRAFT;
       }
+      // The payer is Partner 1 from now on (case-roles.ts).
+      await establishCaseRoles(this.roleModels, c, payerId);
       await c.save();
     });
+    await releasePaymentClaim(this.roleModels, String(c._id));
+    await setAsideDuplicateDrafts(this.roleModels, c);
     await this.userModel.updateOne({ _id: c.owner }, { $set: { paymentDone: true } });
   }
 
@@ -395,6 +467,7 @@ export class PaymentsService {
         c.paymentStatus = PaymentStatus.FAILED;
         await c.save();
       });
+      await releasePaymentClaim(this.roleModels, String(c._id));
     }
   }
 
@@ -420,6 +493,7 @@ export class PaymentsService {
       c.paymentStatus = PaymentStatus.PENDING;
       await c.save();
     });
+    await releasePaymentClaim(this.roleModels, String(c._id));
   }
 
   // Mirrors every refund Stripe holds for a payment, then updates the
@@ -573,6 +647,8 @@ export class PaymentsService {
     const c = await this.caseModel.findById(caseId);
     if (!c) throw new NotFoundException('Case not found');
     if (!this.isPaid(c)) {
+      const other = await otherPersonOf(this.roleModels, c, String(c.owner));
+      await assertNoOtherPaidCase(this.roleModels, String(c._id), [String(c.owner), other ?? '']);
       const owner: any = await this.userModel.findById(c.owner).lean();
       const q = this.quote(c.agreementType);
       const now = new Date();
@@ -603,7 +679,10 @@ export class PaymentsService {
       if (!c.workflowStatus || c.workflowStatus === CaseWorkflowStatus.NOT_PAID) {
         c.workflowStatus = CaseWorkflowStatus.DRAFT;
       }
+      // Nobody in the couple paid, so the provisional owner is Partner 1.
+      await establishCaseRoles(this.roleModels, c, null);
       await c.save();
+      await setAsideDuplicateDrafts(this.roleModels, c);
       await this.userModel.updateOne({ _id: c.owner }, { $set: { paymentDone: true } });
     }
     return c;
