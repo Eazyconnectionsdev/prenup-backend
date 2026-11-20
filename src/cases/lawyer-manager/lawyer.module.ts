@@ -61,6 +61,8 @@ import { LawyerService } from './lawyer.service';
 
 import { LawyerController } from './lawyer.controller';
 import { LawyerCaseGuard } from './lawyer-case.guard';
+import { LawyerProfileService } from './lawyer-profile.service';
+import { S3Module } from '../../s3/s3.module';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -109,6 +111,7 @@ import { LawyerCaseGuard } from './lawyer-case.guard';
         schema: CaseChangeSetSchema,
       },
     ]),
+    S3Module,
   ],
 
   controllers: [
@@ -117,6 +120,7 @@ import { LawyerCaseGuard } from './lawyer-case.guard';
   providers: [
     LawyerService,
     LawyerCaseGuard,
+    LawyerProfileService,
   ],
 
   exports: [

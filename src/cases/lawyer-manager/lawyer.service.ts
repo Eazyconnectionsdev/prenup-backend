@@ -2588,23 +2588,6 @@ export class LawyerService {
       .filter(Boolean);
   }
 
-  /** The signed-in lawyer's own profile (Profile page). */
-  async myProfile(userId: string) {
-    const ids = await this.resolveLawyerIds(userId);
-    const lawyer: any = await this.lawyerModel
-      .findOne({ _id: { $in: ids } })
-      .populate('company', 'name website email phone address city postcode country')
-      .lean()
-      .exec();
-    if (!lawyer) throw new NotFoundException('Lawyer profile not found');
-    const user: any = await this.userModel
-      .findById(userId)
-      .select('firstName middleName lastName email phone createdAt lastLoginAt')
-      .lean()
-      .exec();
-    return { lawyer, user };
-  }
-
   // =====================================================
   // CONFIRMATION HELPERS
   // =====================================================

@@ -8,6 +8,8 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -25,6 +27,8 @@ import { JwtAuthGuard } from '../../common/jwt-auth.guard';
 import { LawyerService } from './lawyer.service';
 import { LawyerCaseGuard } from './lawyer-case.guard';
 import { LawyerAction, LawyerActionGuard } from './lawyer-action.guard';
+import { LawyerProfileService, MAX_MY_PHOTO_BYTES } from './lawyer-profile.service';
+import { ChangeMyPasswordDto, UpdateMyLawyerProfileDto } from './dto/update-my-lawyer-profile.dto';
 
 import { CreateNoteDto } from '../case-manager/dto/create-note.dto';
 import { CreateVersionDto } from '../case-manager/dto/create-version.dto';
@@ -35,6 +39,7 @@ import { CreateVersionDto } from '../case-manager/dto/create-version.dto';
 export class LawyerController {
   constructor(
     private readonly lawyerService: LawyerService,
+    private readonly lawyerProfile: LawyerProfileService,
   ) {}
 
   private ensureUser(req: any) {
@@ -349,15 +354,64 @@ export class LawyerController {
     );
   }
 
+  // ----- The signed-in lawyer's own profile (lawyer portal profile window) -----
+
   @Get('me/profile')
   async myProfile(
     @Req() req,
   ) {
     const user = this.ensureUser(req);
 
-    return this.lawyerService.myProfile(
+    return this.lawyerProfile.profile(
       user.id,
     );
+  }
+
+  @Patch('me/profile')
+  async updateMyProfile(
+    @Req() req,
+    @Body() body: UpdateMyLawyerProfileDto,
+  ) {
+    const user = this.ensureUser(req);
+    return this.lawyerProfile.updateMine(user.id, body);
+  }
+
+  @Post('me/password')
+  async changeMyPassword(
+    @Req() req,
+    @Body() body: ChangeMyPasswordDto,
+  ) {
+    const user = this.ensureUser(req);
+    return this.lawyerProfile.changePassword(user.id, body);
+  }
+
+  @Post('me/photo')
+  @UseInterceptors(FileInterceptor('photo', { limits: { fileSize: MAX_MY_PHOTO_BYTES } }))
+  async setMyPhoto(
+    @Req() req,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const user = this.ensureUser(req);
+    return this.lawyerProfile.setPhoto(user.id, file);
+  }
+
+  @Get('me/photo')
+  async getMyPhoto(
+    @Req() req,
+    @Res({ passthrough: true }) res: any,
+  ) {
+    const user = this.ensureUser(req);
+    const photo = await this.lawyerProfile.getPhoto(user.id);
+    res.set({ 'Content-Type': photo.mimeType, 'Cache-Control': 'private, no-store' });
+    return new StreamableFile(photo.buffer);
+  }
+
+  @Delete('me/photo')
+  async removeMyPhoto(
+    @Req() req,
+  ) {
+    const user = this.ensureUser(req);
+    return this.lawyerProfile.removePhoto(user.id);
   }
 
   // =====================================================

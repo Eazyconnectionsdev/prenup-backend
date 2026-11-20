@@ -277,6 +277,23 @@ export class AdminService {
 
   async deactivateUser(id: string, actorId: string) {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid user id');
+    // Partner 1 (whoever paid for the case) cannot be deleted: the case, its
+    // payment and Partner 2 all depend on them, archived cases included.
+    const asPartner1 = await this.caseModel
+      .findOne({
+        owner: new Types.ObjectId(id),
+        paymentCompleted: true,
+        abandonedAt: null,
+        workflowStatus: { $ne: CaseWorkflowStatus.CANCELLED },
+      })
+      .select('caseNumber')
+      .lean()
+      .exec();
+    if (asPartner1) {
+      throw new BadRequestException(
+        `This account is Partner 1 on case ${(asPartner1 as any).caseNumber ?? ''}, so it cannot be deleted.`.replace(' ,', ','),
+      );
+    }
     const updated = await this.userModel
       .findByIdAndUpdate(id, { active: false }, { new: true })
       .exec();
