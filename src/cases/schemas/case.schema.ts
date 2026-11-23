@@ -53,6 +53,14 @@ export class OnboardingInfo {
   @Prop({ type: Boolean, default: false })
   completed!: boolean;
 
+  // The service the owner picked in the selector, held here until a payment
+  // completes. Choosing a service is not buying one: `Case.agreementType` is
+  // written only once the case is paid for, so until then this is the case's
+  // provisional pick -- it prices the payment screen, re-fills the selector,
+  // and can be changed as often as the owner likes.
+  @Prop({ type: String, enum: AGREEMENT_TYPES, default: null })
+  pendingAgreementType?: string | null;
+
   @Prop({ type: Date, default: null })
   completedAt?: Date | null;
 

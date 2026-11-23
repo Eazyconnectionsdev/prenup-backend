@@ -21,6 +21,8 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
@@ -39,6 +41,28 @@ import { User, UserDocument } from 'src/users/schemas/user.schema';
 const DOCX_MIME_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const PDF_MIME_TYPE = 'application/pdf';
+
+const agreementLogger = new Logger('AgreementService');
+
+/**
+ * Run a step of document generation, and if it throws, say in the log which
+ * step it was before letting the error through. Document generation is a
+ * chain of four or five fallible calls (build, S3, version insert, lock) and
+ * a bare "Internal server error" does not say which one gave out.
+ */
+async function logFailure<T>(what: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const err = error as any;
+    agreementLogger.error(
+      `Document generation failed while ${what}: ${err?.message ?? err}` +
+        (err?.code ? ` (code ${err.code})` : ''),
+      err?.stack,
+    );
+    throw error;
+  }
+}
 
 enum AgreementStage {
   USER = 1,
@@ -112,12 +136,16 @@ export class AgreementService {
       );
     }
 
-    const buffer = await buildAgreementDocxBuffer({
-      caseId: c._id.toString(),
-      myInformation: (c as any).myInformation,
-      partnerInformation: (c as any).partnerInformation,
-      jointInformation: (c as any).jointInformation,
-    });
+    const buffer = await logFailure(
+      `building the docx for case ${caseId}`,
+      () =>
+        buildAgreementDocxBuffer({
+          caseId: c._id.toString(),
+          myInformation: (c as any).myInformation,
+          partnerInformation: (c as any).partnerInformation,
+          jointInformation: (c as any).jointInformation,
+        }),
+    );
 
     const fileName = `agreement-${caseId}-${Date.now()}`;
     const upload = await this.uploadDocxAndPdf(buffer, fileName);
@@ -125,7 +153,10 @@ export class AgreementService {
     const checksum = createHash('sha256').update(buffer).digest('hex');
     const roleMeta = this.resolveEndUserRoleMeta(c, actorObjId);
 
-    const versionDoc = await this.createVersionWithRetry(
+    const versionDoc = await logFailure(
+      `recording the new version row for case ${caseId}`,
+      () =>
+      this.createVersionWithRetry(
       c._id,
       AgreementStage.USER,
       0,
@@ -149,25 +180,17 @@ export class AgreementService {
         isCurrent: true,
         previousVersionId,
       }),
+      ),
     );
 
     const nextMinor = versionDoc.minorVersion;
 
     // This used to be `find()`, whose array result is always truthy, so the
-    // lock row was never created. An upsert also keeps two concurrent
-    // generations from both inserting one.
-    await this.lockModel.updateOne(
-      { caseId: c._id },
-      {
-        $setOnInsert: {
-          caseId: c._id,
-          lockedBy: null,
-          lockedByRole: null,
-          lockedAt: new Date(),
-        },
-      },
-      { upsert: true },
-    );
+    // lock row was never created. An upsert keeps two concurrent generations
+    // from both inserting one - but caseId is uniquely indexed, so when two
+    // upserts do race, the loser still gets E11000 back. The row it wanted
+    // exists either way, so that duplicate is the success case, not a 500.
+    await this.ensureLockRow(c._id);
 
     this.eventEmitter.emit(AUDIT_EVENT, {
       module: AuditModuleEnum.AGREEMENT,
@@ -883,15 +906,38 @@ export class AgreementService {
     }
   }
 
+  /** Create the case's lock row if it has none, tolerating a concurrent insert. */
+  private async ensureLockRow(caseObjId: Types.ObjectId): Promise<void> {
+    try {
+      await this.lockModel.updateOne(
+        { caseId: caseObjId },
+        {
+          $setOnInsert: {
+            caseId: caseObjId,
+            lockedBy: null,
+            lockedByRole: null,
+            lockedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
+    } catch (error) {
+      if ((error as any)?.code === 11000) return;
+      throw error;
+    }
+  }
+
   private async uploadDocxAndPdf(
     buffer: Buffer,
     baseFileName: string,
   ): Promise<DocxAndPdfUpload> {
     const docxS3Key = `agreement/docx/${baseFileName}.docx`;
-    const docxUrl = await this.s3Service.putToBucket(
-      buffer,
-      docxS3Key,
-      DOCX_MIME_TYPE,
+    // The docx upload is the one step here that is allowed to fail the whole
+    // request (without the master file there is no version to record), so it
+    // is also the step most worth naming in the log.
+    const docxUrl = await logFailure(
+      `uploading the agreement docx to S3 (${docxS3Key})`,
+      () => this.s3Service.putToBucket(buffer, docxS3Key, DOCX_MIME_TYPE),
     );
 
     let pdfS3Key: string | null = null;
@@ -906,9 +952,14 @@ export class AgreementService {
         PDF_MIME_TYPE,
       );
     } catch (error) {
-      console.error(
-        `PDF generation failed for ${baseFileName}:`,
-        (error as Error).message,
+      // Deliberately swallowed: the docx is the master, a missing PDF only
+      // costs the preview. The stack matters though - a Chromium that cannot
+      // launch on the server looks identical to "no PDF" without it.
+      pdfS3Key = null;
+      pdfUrl = null;
+      agreementLogger.error(
+        `PDF generation failed for ${baseFileName}: ${(error as Error).message}`,
+        (error as Error).stack,
       );
     }
     return { docxS3Key, docxUrl, pdfS3Key, pdfUrl };
