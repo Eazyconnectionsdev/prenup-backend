@@ -70,6 +70,23 @@ export function priceFor(agreementType?: string | null): ServicePrice | null {
   return SERVICE_PRICING[agreementType as AgreementTypeId] ?? null;
 }
 
+/**
+ * The service a case is working towards.
+ *
+ * `Case.agreementType` is the service the case HAS -- it is written only when a
+ * payment completes, so that a selection abandoned at the payment screen never
+ * looks like a bought one. Everything that has to know which service is in
+ * play BEFORE that (pricing the payment screen, starting a checkout, re-filling
+ * the selector) reads it through here, which falls back to the owner's
+ * provisional pick.
+ */
+export function chosenAgreementType(c?: {
+  agreementType?: string | null;
+  onboarding?: { pendingAgreementType?: string | null } | null;
+} | null): string | null {
+  return c?.agreementType ?? c?.onboarding?.pendingAgreementType ?? null;
+}
+
 // "£499.00"
 export function formatGbp(amount: number): string {
   return `£${amount.toFixed(2)}`;

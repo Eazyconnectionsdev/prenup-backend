@@ -1,14 +1,22 @@
 // Logs refused requests (401 / 403, and the older "Admin only" 400s) as
 // Unauthorized Access Attempts, then hands the error to Nest's default
 // handling so responses are unchanged.
+//
+// It also logs every 5xx. Nest's BaseExceptionFilter only logs exceptions that
+// are NOT HttpException, so a deliberate InternalServerErrorException (the kind
+// S3Service throws) used to return a bare 500 to the browser with nothing at
+// all in the server log. Every 500 now leaves a line naming the route, the
+// caller and the cause.
 
-import { ArgumentsHost, Catch, HttpException } from '@nestjs/common';
+import { ArgumentsHost, Catch, HttpException, Logger } from '@nestjs/common';
 import { BaseExceptionFilter } from '@nestjs/core';
 import { caseIdFromPath, stripPrefix } from './activity-routes';
 import { SecurityEventKind } from './schemas/tracking.schemas';
 import { SecurityEventService } from './security-event.service';
 
 const DENIAL_MESSAGE = /admin only|only (a |an )?(case manager|admin|lawyer)|not allowed|forbidden|not authori[sz]ed|access denied|do not have access|cannot access/i;
+
+const serverErrorLogger = new Logger('ServerError');
 
 @Catch()
 export class SecurityExceptionFilter extends BaseExceptionFilter {
@@ -21,13 +29,43 @@ export class SecurityExceptionFilter extends BaseExceptionFilter {
 
   catch(exception: unknown, host: ArgumentsHost) {
     try {
-      if (host.getType() === 'http' && exception instanceof HttpException) {
-        this.maybeLog(exception, host);
+      if (host.getType() === 'http') {
+        if (exception instanceof HttpException) this.maybeLog(exception, host);
+        this.logServerError(exception, host);
       }
     } catch {
       // Logging must never change the response.
     }
     super.catch(exception, host);
+  }
+
+  /**
+   * One line per 5xx, with the stack. Without this a 500 raised as an
+   * HttpException is invisible: Nest replies and logs nothing.
+   */
+  private logServerError(exception: unknown, host: ArgumentsHost) {
+    const status =
+      exception instanceof HttpException ? exception.getStatus() : 500;
+    if (status < 500) return;
+
+    const req = host.switchToHttp().getRequest();
+    const path: string = (req.originalUrl || req.url || '').split('?')[0];
+    const user = req.user;
+    const who = user
+      ? `${user.role ?? 'user'} ${user.id ?? user._id ?? '?'}`
+      : 'anonymous';
+
+    const err = exception as any;
+    const detail =
+      exception instanceof HttpException
+        ? (exception.getResponse() as any)?.message ?? exception.message
+        : err?.message ?? String(exception);
+    const code = err?.code ? ` (code ${err.code})` : '';
+
+    serverErrorLogger.error(
+      `${req.method} ${path} -> ${status} [${who}] ${detail}${code}`,
+    );
+    if (err?.stack) serverErrorLogger.error(err.stack);
   }
 
   private maybeLog(exception: HttpException, host: ArgumentsHost) {

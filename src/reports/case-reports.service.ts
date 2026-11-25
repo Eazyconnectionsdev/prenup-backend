@@ -371,9 +371,17 @@ export class CaseReportsService {
     const steps = [
       { key: 'registered', label: 'Registered', test: () => true },
       {
+        // Selecting and paying are separate steps of this funnel, and
+        // `agreementType` is only written by the payment -- so what shows a
+        // service was selected but not yet bought is the pending pick. Reading
+        // only agreementType here would collapse this step into the next one
+        // and hide every drop-off at the payment screen.
         key: 'serviceSelected',
         label: 'Service selected',
-        test: (c: any) => (c.agreementType && c.agreementType !== 'help-choose') || isPaid(c) || after(c, 'DRAFT'),
+        test: (c: any) => {
+          const picked = c.agreementType ?? c.onboarding?.pendingAgreementType ?? null;
+          return (picked && picked !== 'help-choose') || isPaid(c) || after(c, 'DRAFT');
+        },
       },
       { key: 'paymentCompleted', label: 'Payment completed', test: (c: any) => isPaid(c) || after(c, 'DRAFT') },
       {

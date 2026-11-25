@@ -61,6 +61,7 @@ import {
 import { buildCaseStageStatus } from './case-stage-status';
 import {
   PAYMENT_CURRENCY,
+  chosenAgreementType,
   formatGbp,
   isPayableAgreementType,
   priceFor,
@@ -895,10 +896,12 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     const { case: c } = await this.loadCaseForPayer(caseId, userId);
 
     // The screen may be opened straight after a service was chosen, before the
-    // client's cached case has caught up, so an explicit service wins.
+    // client's cached case has caught up, so an explicit service wins. Failing
+    // that it is the service the case has bought, or -- the usual case here,
+    // since nothing is bought yet -- the owner's provisional pick.
     const agreementType = isPayableAgreementType(agreementTypeHint)
       ? agreementTypeHint
-      : (c.agreementType ?? null);
+      : chosenAgreementType(c);
 
     const price = priceFor(agreementType);
     const paid =
@@ -940,9 +943,10 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       throw new ConflictException('This case has already been paid for');
     }
 
-    // The service the payment is for: what was sent, otherwise what is already
-    // on the case. Either way it has to be one that can actually be bought.
-    const agreementType = dto.agreementType ?? c.agreementType ?? null;
+    // The service the payment is for: what was sent, otherwise what the case
+    // already has or was provisionally picked. Either way it has to be one that
+    // can actually be bought.
+    const agreementType = dto.agreementType ?? chosenAgreementType(c);
     if (!isPayableAgreementType(agreementType)) {
       throw new BadRequestException(
         'Choose the service you want before paying for it',
@@ -967,9 +971,15 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     const previousStatus = c.paymentStatus ?? PaymentStatus.PENDING;
     const previousAgreementType = c.agreementType ?? null;
 
-    // Paying for a service is also a choice of that service, so the case's own
-    // agreementType is brought in line with what was bought.
+    // Paying for a service is what chooses it. This is the one place a client
+    // payment writes agreementType, so a selection the owner walked away from
+    // at this screen leaves the case with no service on it at all. The
+    // provisional pick has done its job, so it is cleared.
     c.agreementType = agreementType;
+    if (c.onboarding) {
+      c.onboarding.pendingAgreementType = null;
+      c.markModified('onboarding');
+    }
     c.paymentCompleted = true;
     c.paymentStatus = PaymentStatus.COMPLETED;
     c.workflowStatus = CaseWorkflowStatus.DRAFT;
@@ -1267,7 +1277,12 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     }
     return {
       completed: !!c.onboarding?.completed,
+      // What the case HAS, which stays null until it is paid for, and what was
+      // picked towards it. The selector re-fills from the pick and locks on
+      // the first.
       agreementType: c.agreementType ?? null,
+      pendingAgreementType: c.onboarding?.pendingAgreementType ?? null,
+      paid: !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED,
       completedAt: c.onboarding?.completedAt ?? null,
       // Either partner may pay until the case is paid for.
       paid: !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED,
@@ -1293,13 +1308,29 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       throw new ForbiddenException('Only Partner 1 can change the service once the case is paid for');
     }
 
+    // Once the case is paid for, the service it bought is the service it has.
+    const paid =
+      !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED;
+    if (paid && c.agreementType && c.agreementType !== dto.agreementType) {
+      throw new BadRequestException(
+        'This case has been paid for, so its service can no longer be changed',
+      );
+    }
+
     const prev = c.onboarding;
-    c.agreementType = dto.agreementType;
+    const previousPick = prev?.pendingAgreementType ?? null;
+
+    // Deliberately NOT `c.agreementType`. Choosing a service is not buying one:
+    // the pick is held on the onboarding record and only becomes the case's
+    // agreementType when the payment goes through (payForCase / markCasePaid).
+    // That is what lets the owner come back from the payment screen and pick
+    // again, and what keeps an unpaid case from showing a chosen service.
     c.onboarding = {
       completed: true,
       completedAt: prev?.completedAt ?? new Date(),
       completedBy: prev?.completedBy ?? new Types.ObjectId(userId),
       residesInUK: dto.residesInUK,
+      pendingAgreementType: paid ? null : dto.agreementType,
     } as any;
     await c.save();
 
@@ -1309,15 +1340,22 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       action: AuditAction.FORM_SUBMITTED,
       module: AuditModuleName.FORM,
       stage: 'Onboarding',
-      notes: `Service selected: ${dto.agreementType}`,
+      notes: paid
+        ? `Service confirmed: ${dto.agreementType}`
+        : `Service chosen, pending payment: ${dto.agreementType}`,
       changedFields: {
-        agreementType: { old: prev ? null : null, new: dto.agreementType },
+        'onboarding.pendingAgreementType': {
+          old: previousPick,
+          new: paid ? null : dto.agreementType,
+        },
       },
     });
 
     return {
       completed: true,
-      agreementType: c.agreementType,
+      agreementType: c.agreementType ?? null,
+      pendingAgreementType: c.onboarding?.pendingAgreementType ?? null,
+      paid,
       completedAt: c.onboarding?.completedAt,
     };
   }
@@ -1815,6 +1853,7 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
         p2Status: PartnerReviewStatus.IN_REVIEW,
         mutualStatus: MutualApprovalStatus.PENDING,
         timestamp: now,
+        notes: trimmedMessage || null,
       } as ReviewTimelineEntry);
     } else {
       approval.user2Approved = true;
@@ -1836,6 +1875,7 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
         p2Status: PartnerReviewStatus.FINAL_SUBMIT,
         mutualStatus: MutualApprovalStatus.PENDING,
         timestamp: now,
+        notes: trimmedMessage || null,
       } as ReviewTimelineEntry);
     }
 
@@ -1851,6 +1891,7 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       approval.disapprovalReason = null;
     }
 
+    c.markModified('approval');
     await c.save();
 
     // Trigger Handshake review emails

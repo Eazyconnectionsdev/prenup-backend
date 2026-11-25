@@ -21,6 +21,7 @@ import {
   setAsideDuplicateDrafts,
 } from '../cases/case-roles';
 import { getNextSeq } from '../utils/case-number.util';
+import { chosenAgreementType } from '../cases/service-pricing';
 import { AGREEMENT_TYPE_LABELS, SERVICE_GROUP_LABELS, serviceGroupOf } from '../tracking/labels';
 import {
   PAID_STATUSES,
@@ -88,6 +89,23 @@ export class PaymentsService {
     };
   }
 
+  /**
+   * Turns the owner's provisional pick into the case's service.
+   *
+   * Choosing a service does not write `agreementType` -- paying for one does,
+   * so every path that marks a case paid has to settle it, and the pick is
+   * cleared once it has been honoured. A case that somehow reaches payment
+   * with neither is left alone rather than guessed at.
+   */
+  private commitChosenService(c: CaseDocument) {
+    const chosen = chosenAgreementType(c);
+    if (chosen && !c.agreementType) c.agreementType = chosen;
+    if (c.onboarding?.pendingAgreementType) {
+      c.onboarding.pendingAgreementType = null;
+      c.markModified('onboarding');
+    }
+  }
+
   private isPaid(c: any) {
     return (
       c.paymentCompleted ||
@@ -122,7 +140,8 @@ export class PaymentsService {
 
   async getCasePayment(caseId: string, user: any) {
     const c = await this.loadCaseFor(caseId, user);
-    const q = this.quote(c.agreementType);
+    // Unpaid cases have no agreementType yet, so this prices the pick.
+    const q = this.quote(chosenAgreementType(c));
     return {
       ...q,
       paid: this.isPaid(c),
@@ -134,11 +153,14 @@ export class PaymentsService {
   async createCheckout(caseId: string, user: any) {
     const c = await this.loadCaseFor(caseId, user);
     if (this.isPaid(c)) throw new BadRequestException('This case has already been paid for');
-    if (!c.agreementType || c.agreementType === 'help-choose') {
+    // The service is only written onto the case by the payment this starts, so
+    // what there is to check (and to charge for) is the provisional pick.
+    const agreementType = chosenAgreementType(c);
+    if (!agreementType || agreementType === 'help-choose') {
       throw new BadRequestException('Please choose your agreement before paying');
     }
     const stripe = this.stripe();
-    const q = this.quote(c.agreementType);
+    const q = this.quote(agreementType);
     const payer: any = await this.userModel.findById(user.id ?? user._id).lean();
 
     // Only one initial payment per couple: hold the case and both people for
@@ -407,6 +429,7 @@ export class PaymentsService {
       this.logger.warn(`Case ${c.caseNumber ?? c._id} was already paid; second payment needs a refund (${reason})`);
     }
     await this.asSystem(reason, async () => {
+      this.commitChosenService(c);
       c.paymentCompleted = true;
       c.paymentStatus = PaymentStatus.COMPLETED;
       if (!c.workflowStatus || c.workflowStatus === CaseWorkflowStatus.NOT_PAID) {
@@ -650,7 +673,11 @@ export class PaymentsService {
       const other = await otherPersonOf(this.roleModels, c, String(c.owner));
       await assertNoOtherPaidCase(this.roleModels, String(c._id), [String(c.owner), other ?? '']);
       const owner: any = await this.userModel.findById(c.owner).lean();
-      const q = this.quote(c.agreementType);
+      // The case may not have an agreementType yet -- a service is only written
+      // onto it when it is paid for, which is what is happening here -- so the
+      // quote and the receipt are both taken from the resolved pick.
+      const service = chosenAgreementType(c);
+      const q = this.quote(service);
       const now = new Date();
       const tx = await this.txModel.create({
         transactionId: await this.nextId('TXN'),
@@ -661,7 +688,7 @@ export class PaymentsService {
         customerId: owner?._id ?? null,
         customerName: userDisplayName(owner),
         customerEmail: owner?.email ?? null,
-        service: c.agreementType ?? null,
+        service,
         serviceGroup: q.serviceGroup,
         amount: q.amount,
         currency: q.currency,
@@ -674,6 +701,7 @@ export class PaymentsService {
       });
       // Recorded as the staff member who did it.
       RequestContext.set('statusReason', `Marked as paid by staff (${tx.transactionId})`);
+      this.commitChosenService(c);
       c.paymentCompleted = true;
       c.paymentStatus = PaymentStatus.COMPLETED;
       if (!c.workflowStatus || c.workflowStatus === CaseWorkflowStatus.NOT_PAID) {
