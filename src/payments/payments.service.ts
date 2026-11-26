@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -14,6 +15,7 @@ import { Case, CaseDocument, CaseWorkflowStatus, PaymentStatus } from '../cases/
 import { User } from '../users/schemas/user.schema';
 import {
   assertNoOtherPaidCase,
+  CHECKOUT_SESSION_TTL_MS,
   claimInitialPayment,
   establishCaseRoles,
   otherPersonOf,
@@ -154,10 +156,66 @@ export class PaymentsService {
       throw err;
     }
     try {
+      await this.closeEarlierCheckouts(c, payerId, stripe);
       return await this.openCheckout(c, payer, q, stripe);
     } catch (err) {
       await releasePaymentClaim(this.roleModels, String(c._id));
       throw err;
+    }
+  }
+
+  /**
+   * Before a new checkout opens, every earlier one for this couple is closed,
+   * so two can never be payable at once (one person's could otherwise still be
+   * open when the other starts theirs). An open one is expired; one already
+   * paid whose Stripe event has not arrived yet is recorded now, and the new
+   * attempt is refused.
+   */
+  private async closeEarlierCheckouts(c: any, payerId: string, stripe: any) {
+    const other = await otherPersonOf(this.roleModels, c, payerId);
+    const people = [payerId, other].filter(Boolean).map((p) => new Types.ObjectId(p as string));
+    const earlier = await this.txModel
+      .find({
+        type: TransactionType.PAYMENT,
+        status: TransactionStatus.INITIATED,
+        provider: 'stripe',
+        providerSessionId: { $ne: null },
+        $or: [{ caseId: c._id }, { createdBy: { $in: people } }],
+      })
+      .lean();
+
+    for (const tx of earlier as any[]) {
+      let session = await stripe.checkout.sessions.retrieve(tx.providerSessionId);
+      if (session.status === 'open') {
+        try {
+          session = await stripe.checkout.sessions.expire(session.id);
+        } catch {
+          // It was completed in the meantime; see how it ended.
+          session = await stripe.checkout.sessions.retrieve(tx.providerSessionId);
+        }
+      }
+      if (session.payment_status === 'paid') {
+        await this.finalizeSession(session);
+        throw new ConflictException(
+          'A payment for you or your partner has already gone through. Please refresh the page.',
+        );
+      }
+      if (session.status === 'complete') {
+        // Completed but not paid yet: a bank payment that is still clearing.
+        throw new ConflictException(
+          'A payment for you or your partner is still being processed. Please try again later.',
+        );
+      }
+      await this.txModel.updateOne(
+        { _id: tx._id, status: TransactionStatus.INITIATED },
+        {
+          $set: {
+            status: TransactionStatus.CANCELLED,
+            failureReason: 'Closed when a new checkout was opened',
+            occurredAt: new Date(),
+          },
+        },
+      );
     }
   }
 
@@ -236,6 +294,9 @@ export class PaymentsService {
           },
         ],
         customer_email: payer?.email || undefined,
+        // Closes before the payment claim lapses (case-roles.ts), so this
+        // page can never still be payable once the partner may start one.
+        expires_at: Math.floor((Date.now() + CHECKOUT_SESSION_TTL_MS) / 1000),
         client_reference_id: String(c._id),
         metadata,
         payment_intent_data: { metadata },
@@ -467,7 +528,13 @@ export class PaymentsService {
         c.paymentStatus = PaymentStatus.FAILED;
         await c.save();
       });
-      await releasePaymentClaim(this.roleModels, String(c._id));
+      // A declined card leaves the checkout page open for another try, so
+      // the claim stays until that page closes (expireSession). Only a
+      // checkout that is over (a bank payment that failed later) frees it,
+      // and never a claim a newer checkout has taken since.
+      if (session) {
+        await releasePaymentClaim(this.roleModels, String(c._id), undefined, parent?.initiatedAt ?? null);
+      }
     }
   }
 
@@ -482,18 +549,23 @@ export class PaymentsService {
     const caseId = session.metadata?.caseId || session.client_reference_id;
     if (!caseId || !Types.ObjectId.isValid(caseId)) return;
     const c = await this.caseModel.findById(caseId);
-    if (!c || this.isPaid(c) || c.paymentStatus !== PaymentStatus.INITIATED) return;
+    if (!c || this.isPaid(c)) return;
     const stillOpen = await this.txModel.exists({
       caseId: c._id,
       type: TransactionType.PAYMENT,
       status: TransactionStatus.INITIATED,
     });
     if (stillOpen) return;
-    await this.asSystem('Checkout expired', async () => {
-      c.paymentStatus = PaymentStatus.PENDING;
-      await c.save();
-    });
-    await releasePaymentClaim(this.roleModels, String(c._id));
+    if (c.paymentStatus === PaymentStatus.INITIATED) {
+      await this.asSystem('Checkout expired', async () => {
+        c.paymentStatus = PaymentStatus.PENDING;
+        await c.save();
+      });
+    }
+    // Frees the claim this checkout held (also after a declined card), but
+    // never one a newer checkout has taken since this one opened.
+    const openedAt = tx?.initiatedAt ?? new Date((session.created ?? 0) * 1000 + 1000);
+    await releasePaymentClaim(this.roleModels, String(c._id), undefined, openedAt);
   }
 
   // Mirrors every refund Stripe holds for a payment, then updates the

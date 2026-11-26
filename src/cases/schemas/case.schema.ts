@@ -535,9 +535,12 @@ export const FUTURE_GIFTS_TREATMENTS = [
 
 export const INHERITANCE_SELECTIONS = ['NoneExpected', 'LogDetails'] as const;
 
+// 'FutureExpectation' is shown as "Expected" and 'PendingProbate' as
+// "Pending (in probate or settlement)".
 export const INHERITANCE_STATUSES = [
   'FutureExpectation',
   'PendingProbate',
+  'Received',
 ] as const;
 
 export const SPOUSAL_MAINTENANCE_INTENTIONS = [
@@ -546,13 +549,23 @@ export const SPOUSAL_MAINTENANCE_INTENTIONS = [
   'Custom',
 ] as const;
 
+// Current answers first. The older codes are still accepted so cases saved
+// before the questions were reworded keep validating; the form no longer
+// offers them.
 export const CRITICAL_ILLNESS_SAFEGUARDS = [
+  'ReviewAgreement',
+  'NoSpecificReview',
+  'Custom',
+  // legacy
   'TermsFixed',
   'Voidable',
-  'Custom',
 ] as const;
 
 export const DEATH_WILLS_ALIGNMENTS = [
+  'FollowWills',
+  'ReviewOnDeath',
+  'Custom',
+  // legacy
   'MirrorDivorce',
   'ProvideDifferently',
   'Unsure',
@@ -560,9 +573,12 @@ export const DEATH_WILLS_ALIGNMENTS = [
 
 export const REVIEW_TRIGGER_TYPES = ['Never', 'Standard', 'Custom'] as const;
 
+// 'career_change' is shown as "a significant change in health, disability
+// or ability to work".
 export const STANDARD_MILESTONES = [
   'child_birth',
   'career_change',
+  'financial_change',
   '5_year',
   '10_year',
 ] as const;
@@ -686,6 +702,9 @@ export class MatrimonialAgreement {
 
   @Prop({ type: String, enum: DEATH_WILLS_ALIGNMENTS, default: null })
   deathWillsAlignment?: string | null;
+
+  @Prop({ type: String, default: '' })
+  customDeathWills?: string;
 
   @Prop({ type: String, enum: REVIEW_TRIGGER_TYPES, default: null })
   reviewTriggerType?: string | null;
