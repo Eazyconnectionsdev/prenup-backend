@@ -59,6 +59,7 @@ import {
   setAsideDuplicateDrafts,
 } from './case-roles';
 import { buildCaseStageStatus } from './case-stage-status';
+import { applyCeremonyTiming } from './ceremony-timing';
 import {
   PAYMENT_CURRENCY,
   formatGbp,
@@ -1656,6 +1657,15 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     }
 
     const { section, field } = config;
+
+    // The planned ceremony date decides whether the standard online process
+    // can continue: inside 28 days the couple cannot save it themselves, and
+    // 29-35 days needs the risk acknowledgement. The status is stored with the
+    // answers so staff can see and prioritise it.
+    if (field === 'personalInformation') {
+      data = applyCeremonyTiming(data ?? {}, isPrivileged);
+    }
+
     (c as any)[section] = (c as any)[section] || {};
     (c as any)[section][field] = data;
     c.markModified(section);

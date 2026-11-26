@@ -19,13 +19,22 @@ import { Model, Types } from 'mongoose';
  *   - Only one initial payment can go through for a couple. A payment first
  *     claims the case and both people (claimInitialPayment); a second attempt,
  *     on the same case or on another draft for the same couple, is refused
- *     before anything is charged.
+ *     before anything is charged. A Stripe checkout page closes before its
+ *     claim lapses, and a new checkout first closes (or records) any earlier
+ *     one for the couple, so two pages are never payable at once.
  */
 
 type Models = { caseModel: Model<any>; userModel: Model<any> };
 
-// A claim older than this is treated as abandoned. Long enough to cover a
-// Stripe checkout session (Stripe keeps them open for at least 30 minutes).
+// How long a Stripe checkout page stays payable. Stripe's own default is 24
+// hours, far longer than the claim below; a page still open after its claim
+// lapsed would let both partners pay. 31 minutes: Stripe's minimum is 30,
+// counted from when it creates the session, a moment after this is worked out.
+export const CHECKOUT_SESSION_TTL_MS = 31 * 60 * 1000;
+
+// A claim older than this is treated as abandoned. It outlives the checkout
+// page it was taken for, so a page can never still be payable once another
+// payment may start.
 export const PAYMENT_CLAIM_TTL_MS = 35 * 60 * 1000;
 
 const idOf = (v: any): string => (v ? String(v._id ?? v) : '');
@@ -160,13 +169,29 @@ export async function claimInitialPayment(
   return { reused };
 }
 
-/** Releases a claim taken by claimInitialPayment (payment failed or done). */
-export async function releasePaymentClaim(models: Models, caseId: string, onlyUsers?: string[]) {
+/**
+ * Releases a claim taken by claimInitialPayment (payment failed or done).
+ *
+ * `takenUpTo`: release only a claim taken at or before then. A Stripe event
+ * about an older checkout arrives on its own schedule, and must not free the
+ * claim a newer checkout has taken since.
+ */
+export async function releasePaymentClaim(
+  models: Models,
+  caseId: string,
+  onlyUsers?: string[],
+  takenUpTo?: Date | null,
+) {
   const caseOid = new Types.ObjectId(caseId);
-  await models.caseModel.updateOne({ _id: caseOid }, { $set: { paymentClaim: null } }).exec();
-  const filter: any = { 'paymentLock.caseId': caseOid };
-  if (onlyUsers) filter._id = { $in: onlyUsers.map((u) => new Types.ObjectId(u)) };
-  await models.userModel.updateMany(filter, { $set: { paymentLock: null } }).exec();
+  const caseFilter: any = { _id: caseOid };
+  const lockFilter: any = { 'paymentLock.caseId': caseOid };
+  if (takenUpTo) {
+    caseFilter['paymentClaim.at'] = { $lte: takenUpTo };
+    lockFilter['paymentLock.at'] = { $lte: takenUpTo };
+  }
+  await models.caseModel.updateOne(caseFilter, { $set: { paymentClaim: null } }).exec();
+  if (onlyUsers) lockFilter._id = { $in: onlyUsers.map((u) => new Types.ObjectId(u)) };
+  await models.userModel.updateMany(lockFilter, { $set: { paymentLock: null } }).exec();
 }
 
 const plain = (doc: any, path: string) => {

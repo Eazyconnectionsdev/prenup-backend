@@ -171,6 +171,11 @@ export class MatrimonialAgreementDto {
   @IsIn(DEATH_WILLS_ALIGNMENTS)
   deathWillsAlignment?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(LONG_TEXT)
+  customDeathWills?: string;
+
   // 7. Agreement review triggers
   @IsOptional()
   @IsIn(REVIEW_TRIGGER_TYPES)
