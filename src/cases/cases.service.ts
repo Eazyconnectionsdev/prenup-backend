@@ -1283,10 +1283,9 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
       // the first.
       agreementType: c.agreementType ?? null,
       pendingAgreementType: c.onboarding?.pendingAgreementType ?? null,
-      paid: !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED,
-      completedAt: c.onboarding?.completedAt ?? null,
       // Either partner may pay until the case is paid for.
       paid: !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED,
+      completedAt: c.onboarding?.completedAt ?? null,
     };
   }
 
@@ -1310,8 +1309,6 @@ Nothing has been merged, deleted or linked. Open case ${target.caseNumber ?? tar
     }
 
     // Once the case is paid for, the service it bought is the service it has.
-    const paid =
-      !!c.paymentCompleted || c.paymentStatus === PaymentStatus.COMPLETED;
     if (paid && c.agreementType && c.agreementType !== dto.agreementType) {
       throw new BadRequestException(
         'This case has been paid for, so its service can no longer be changed',
